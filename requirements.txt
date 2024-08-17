@@ -1,0 +1,7 @@
+transformers
+torch
+protobuf
+sentencepiece
+tqdm
+pydantic
+Accelerate
