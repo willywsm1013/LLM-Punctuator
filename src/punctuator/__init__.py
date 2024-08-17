@@ -1,1 +1,1 @@
-from .transformers import TransformerAutoPunctuator, PATH_TO_TRANSFORMERS_PUNCTUATOR
+from .transformers import TransformersAutoPunctuator, PATH_TO_TRANSFORMERS_PUNCTUATOR

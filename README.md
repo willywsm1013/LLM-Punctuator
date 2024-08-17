@@ -1,5 +1,5 @@
 # LLM Punctuator
-This repo tries to use LLM as a punctuator by constraining the next predicted tokens.
+This repo tries to use LLM as a punctuator by constraining the next predicting tokens.
 
 ## Install
 Tested on python3.10
@@ -46,5 +46,5 @@ Currently only support these models:
 See `src/punctuator/transformers.py` for more model details.
 
 ## TODO
-[] version control
-[] benchmark result
+- [ ] version control
+- [ ] benchmark result

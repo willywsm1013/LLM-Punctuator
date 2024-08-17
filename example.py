@@ -2,7 +2,7 @@ import re
 import logging
 logging.basicConfig(level=logging.INFO)
 import argparse
-from src.punctuator import PATH_TO_TRANSFORMERS_PUNCTUATOR, TransformerAutoPunctuator
+from src.punctuator import PATH_TO_TRANSFORMERS_PUNCTUATOR, TransformersAutoPunctuator
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -28,7 +28,7 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
 
-    punctuator = TransformerAutoPunctuator.from_pretrained(args.model_name_or_path, args.language) 
+    punctuator = TransformersAutoPunctuator.from_pretrained(args.model_name_or_path, args.language) 
     if args.language == 'zh':
         punctuations = "，。？！、；"
 

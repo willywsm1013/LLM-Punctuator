@@ -13,7 +13,7 @@ from src.logits_processor import (
 from .base import LLMPunctuator
 from .prompt import ZH_SYSTEM_PROMPT
 
-class TransformerAutoPunctuator():
+class TransformersAutoPunctuator():
     @classmethod
     def from_pretrained(cls, model_name_or_path:str, language:str='zh'):
         Punctuator = PATH_TO_TRANSFORMERS_PUNCTUATOR[model_name_or_path]
