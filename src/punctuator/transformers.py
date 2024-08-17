@@ -48,7 +48,6 @@ class TransformersLLMPunctuator(LLMPunctuator):
 
         text_tokens = self.encode_text(text)
         punctuation_tokens = self.encode_text(punctuations)
-        logging.info(f'Punctuation tokens: {punctuation_tokens}')
 
         chunk_nums = math.ceil(len(text_tokens) / chunk_size)
         chunks = [text_tokens[i*chunk_size:(i+1)*chunk_size] 
@@ -70,7 +69,6 @@ class TransformersLLMPunctuator(LLMPunctuator):
             ]
             
             input_prompt = self.apply_chat_template(messages)
-            print(input_prompt)
             inputs = self.tokenizer(input_prompt, return_tensors='pt')
             input_ids = inputs['input_ids'].to(self.device)
             attention_mask = inputs['attention_mask'].to(self.device)
@@ -109,7 +107,7 @@ class TransformersLLMPunctuator(LLMPunctuator):
                                         chunk_idx == chunk_nums - 1)
             
             generated_result = self.decode(generated_tokens)
-            logging.info(f'chunk result: {generated_result}')
+            logging.debug(f'chunk result: {generated_result}')
             prev_decode_tokens = generated_tokens
             prev_chunk = chunk
             result_tokens.extend(generated_tokens)
@@ -153,7 +151,7 @@ class TransformersLLMPunctuator(LLMPunctuator):
                                      logits_processor=logits_processor_list,
                                      max_length=max_length,
                                      do_sample=False,
-                                     temperature=0,
+                                     temperature=1.0,
                                      top_k=1,
                                      top_p=1,)
         generated_tokens = output[0][input_ids.shape[1]:]
@@ -173,7 +171,10 @@ class TransformersLLMPunctuator(LLMPunctuator):
                                      logits_processor=logits_processor_list,
                                      max_length=max_length,
                                      num_beams=num_beams,
-                                     do_sample=False)
+                                     do_sample=False,
+                                     temperature=1.0,
+                                     top_k=50,
+                                     top_p=1.)
         
         generated_tokens = output[0][input_ids.shape[1]:]
         if generated_tokens[-1] == self.tokenizer.eos_token_id:

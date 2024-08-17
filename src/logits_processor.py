@@ -29,7 +29,6 @@ class CustomLogitsProcessor(LogitsProcessor):
                 allowed_tokens = set()
 
             allowed_tokens.add(self.original_text_tokens[self.current_index])
-        print(f'* {self.current_index} {allowed_tokens}')
         logits = torch.full_like(scores, -float('inf'))
         for token in allowed_tokens:
             logits[:, token] = scores[:, token]

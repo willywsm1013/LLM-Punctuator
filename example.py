@@ -8,13 +8,16 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--model_name_or_path', type=str,
                         choices=PATH_TO_TRANSFORMERS_PUNCTUATOR.keys(),
-                        required=True)
+                        required=True,
+                        help="Model name or path to the model")
     text_group = parser.add_mutually_exclusive_group(required=True)
-    text_group.add_argument('--file', type=str)
-    text_group.add_argument('--text', type=str)
+    text_group.add_argument('--file', type=str, help="Path to the file")
+    text_group.add_argument('--text', type=str, help="Text to punctuate")
     parser.add_argument('-c', '--chunk_size', type=int,
-                        default=200)
-    parser.add_argument('--num_beams', type=int, default=1)
+                        default=50,
+                        help="Chunk size for processing. Default: 50")
+    parser.add_argument('--num_beams', type=int, default=1,
+                        help="Number of beams for beam search")
     parser.add_argument('-l', '--language', type=str,
                         choices=['zh'],
                         default='zh')
