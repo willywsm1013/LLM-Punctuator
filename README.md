@@ -30,6 +30,7 @@ This project uses git hooks to enforce code quality and commit message standards
 
 The following hooks will be installed:
 - **commit-msg**: Validates that commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) format
+- **pre-push**: Runs linting checks (`./bin/lint.sh`) before allowing push
 
 #### Conventional Commits Format
 Commit messages must follow this pattern:
