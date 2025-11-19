@@ -3,10 +3,14 @@
 import abc
 import logging
 import math
+import os
 
 import torch
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessorList
+
+# Disable tokenizers parallelism to avoid fork warning
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 from llm_punctuator.items import Message, Role
 from llm_punctuator.logits_processor import BeamSearchCustomLogitsProcessor, CustomLogitsProcessor
@@ -71,7 +75,7 @@ class TransformersLLMPunctuator(LLMPunctuator):
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_name_or_path, device_map="auto", torch_dtype="auto"
+            model_name_or_path, device_map="auto", dtype="auto"
         )
         self.device = self.model.device
 
@@ -241,7 +245,6 @@ class TransformersLLMPunctuator(LLMPunctuator):
             max_length=max_length,
             do_sample=False,
             temperature=1.0,
-            top_k=1,
             top_p=1,
         )
         generated_tokens = output[0][input_ids.shape[1] :]
@@ -278,7 +281,6 @@ class TransformersLLMPunctuator(LLMPunctuator):
             num_beams=num_beams,
             do_sample=False,
             temperature=1.0,
-            top_k=50,
             top_p=1.0,
         )
 
