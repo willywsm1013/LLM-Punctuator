@@ -2,7 +2,7 @@ import re
 import logging
 logging.basicConfig(level=logging.INFO)
 import argparse
-from src.punctuator import PATH_TO_TRANSFORMERS_PUNCTUATOR, TransformersAutoPunctuator
+from llm_punctuator.punctuator import PATH_TO_TRANSFORMERS_PUNCTUATOR, TransformersAutoPunctuator
 
 def get_args():
     parser = argparse.ArgumentParser()

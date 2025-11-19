@@ -1,0 +1,23 @@
+[project]
+name = "llm-punctuator"
+version = "0.1.0"
+description = "Use LLM as a punctuator by constraining the next predicting tokens"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "transformers",
+    "torch",
+    "protobuf",
+    "sentencepiece",
+    "tqdm",
+    "pydantic",
+    "accelerate",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = []

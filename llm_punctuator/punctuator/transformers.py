@@ -6,8 +6,8 @@ from typing import List, Optional
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers import LogitsProcessorList
-from src.items import Message, Role
-from src.logits_processor import (
+from llm_punctuator.items import Message, Role
+from llm_punctuator.logits_processor import (
     CustomLogitsProcessor, BeamSearchCustomLogitsProcessor
 )
 from .base import LLMPunctuator

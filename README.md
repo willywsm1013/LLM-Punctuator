@@ -3,8 +3,19 @@ This repo tries to use LLM as a punctuator by constraining the next predicting t
 
 ## Install
 Tested on python3.10
+
+### Using uv (recommended)
+```bash
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install the package and dependencies
+uv pip install -e .
 ```
-pip install -r requirements.txt
+
+### Using pip
+```bash
+pip install -e .
 ```
 
 ## Usage
