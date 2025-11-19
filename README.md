@@ -18,6 +18,54 @@ uv pip install -e .
 pip install -e .
 ```
 
+## Development
+
+### Install Git Hooks
+This project uses git hooks to enforce code quality and commit message standards.
+
+```bash
+# Install git hooks (run this once after cloning the repository)
+./bin/install-hooks.sh
+```
+
+The following hooks will be installed:
+- **commit-msg**: Validates that commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) format
+
+#### Conventional Commits Format
+Commit messages must follow this pattern:
+```
+<type>(<scope>): <subject>
+```
+
+**Types:**
+- `feat`: A new feature
+- `fix`: A bug fix
+- `docs`: Documentation only changes
+- `style`: Code style changes (formatting, etc)
+- `refactor`: Code refactoring
+- `perf`: Performance improvements
+- `test`: Adding or updating tests
+- `build`: Changes to build system or dependencies
+- `ci`: Changes to CI configuration
+- `chore`: Other changes
+
+**Examples:**
+```
+feat(auth): add login functionality
+fix: resolve memory leak in data processing
+docs(readme): update installation instructions
+```
+
+### Code Quality Tools
+```bash
+# Check code formatting and linting (without auto-fix)
+./bin/lint.sh
+
+# Auto-fix code formatting and linting issues
+./bin/fix.sh
+```
+
+
 ## Usage
 ### Greedy Search
 Inference using a text file:
@@ -54,7 +102,7 @@ Currently only support these models:
 * meta-llama/Meta-Llama-3.1-8B-Instruct
 * google/gemma-2-2b-it
 
-See `src/punctuator/transformers.py` for more model details.
+See `llm_punctuator/punctuator/transformers.py` for more model details.
 
 ## TODO
 - [ ] version control
