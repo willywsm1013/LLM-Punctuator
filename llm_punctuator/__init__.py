@@ -5,6 +5,6 @@ using transformer-based language models with constrained generation.
 """
 
 # LLM Punctuator Package
-from llm_punctuator.punctuator import PATH_TO_TRANSFORMERS_PUNCTUATOR, TransformersAutoPunctuator
+from llm_punctuator.punctuator import TransformersLLMPunctuator
 
-__all__ = ["TransformersAutoPunctuator", "PATH_TO_TRANSFORMERS_PUNCTUATOR"]
+__all__ = ["TransformersLLMPunctuator"]

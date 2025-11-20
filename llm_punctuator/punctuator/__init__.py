@@ -1,8 +1,5 @@
-"""LLM Punctuator package for adding punctuation using language models."""
+"""LLM Punctuator module for adding punctuation to text using LLMs."""
 
-from .transformers import (
-    PATH_TO_TRANSFORMERS_PUNCTUATOR as PATH_TO_TRANSFORMERS_PUNCTUATOR,
-)
-from .transformers import (
-    TransformersAutoPunctuator as TransformersAutoPunctuator,
-)
+from llm_punctuator.punctuator.transformers import TransformersLLMPunctuator
+
+__all__ = ["TransformersLLMPunctuator"]
