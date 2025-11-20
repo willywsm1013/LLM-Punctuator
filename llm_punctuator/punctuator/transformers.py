@@ -20,7 +20,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 logger = logging.getLogger(__name__)
 
 # Default punctuation marks for different languages
-ZH_PUNCTUATIONS = "，。？！、；"
+ZH_PUNCTUATIONS = "，。？！、；："
 EN_PUNCTUATIONS = ",.?!;:'"
 
 
@@ -43,6 +43,7 @@ class TransformersLLMPunctuator(LLMPunctuator):
             model_name_or_path, device_map="auto", dtype="auto"
         )
         self.device = self.model.device
+        logger.info(f"Model loaded on device: {self.device}")
 
         # Extract the assistant closing tag once during initialization
         # This is used to remove the closing tag from prompts to allow continued generation
