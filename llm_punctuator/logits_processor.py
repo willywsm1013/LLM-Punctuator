@@ -1,85 +1,33 @@
 """Custom logits processors for constrained text generation."""
 
+import logging
+
 import torch
 from transformers import LogitsProcessor
+
+logger = logging.getLogger(__name__)
 
 
 class CustomLogitsProcessor(LogitsProcessor):
     """Logits processor that constrains generation to original text tokens and punctuation.
 
-    This processor ensures that the model can only generate tokens from the original
-    text or specified punctuation marks, maintaining the original text structure while
-    adding punctuation.
+    This processor ensures the model generates tokens in a specific pattern:
+    1. Original text tokens must appear in order
+    2. Punctuation can only be inserted between text tokens
+    3. No consecutive punctuation is allowed
+    4. The original text content is preserved exactly
 
-    Attributes:
-        original_text_tokens: List of token IDs from the original text.
-        punctuation_tokens: List of token IDs for allowed punctuation marks.
-        is_first_token: Whether the next token is the first in the sequence.
-        has_prev_input: Whether there is previous input context.
-        current_index: Current position in the original text tokens.
-    """
+    The processor works by:
+    - Tracking which original text tokens have been generated
+    - Allowing only valid next tokens based on the current state
+    - Setting logits to -inf for all invalid tokens
 
-    def __init__(
-        self, original_text_tokens: list[int], punctuation_tokens: list[int], has_prev_input: bool
-    ) -> None:
-        """Initialize the custom logits processor.
-
-        Args:
-            original_text_tokens: List of token IDs from the original text.
-            punctuation_tokens: List of token IDs for allowed punctuation marks.
-            has_prev_input: Whether there is previous input context.
-        """
-        self.original_text_tokens = original_text_tokens
-        self.punctuation_tokens = punctuation_tokens
-        self.is_first_token = True
-        self.has_prev_input = has_prev_input
-        self.current_index = 0
-
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        """Process logits to constrain token generation.
-
-        Args:
-            input_ids: Input token IDs tensor.
-            scores: Logits scores tensor.
-
-        Returns:
-            Modified logits tensor with only allowed tokens having valid scores.
-        """
-        # first token only allow original text token
-        if self.is_first_token:
-            allowed_tokens = {self.original_text_tokens[self.current_index]}
-            if self.has_prev_input:
-                allowed_tokens.update(self.punctuation_tokens)
-            self.is_first_token = False
-        else:
-            if input_ids[0][-1] == self.original_text_tokens[self.current_index]:
-                # if last token is word, increase current index
-                allowed_tokens = set(self.punctuation_tokens)
-                self.current_index += 1
-            else:
-                # if last token is punctuation, only allow word
-                allowed_tokens = set()
-
-            allowed_tokens.add(self.original_text_tokens[self.current_index])
-        logits = torch.full_like(scores, -float("inf"))
-        for token in allowed_tokens:
-            logits[:, token] = scores[:, token]
-        return logits
-
-
-class BeamSearchCustomLogitsProcessor(LogitsProcessor):
-    """Logits processor for beam search with constrained generation.
-
-    This processor maintains separate states for each beam in beam search,
-    ensuring that each beam can only generate tokens from the original text
-    or specified punctuation marks.
-
-    Attributes:
-        original_text_tokens: List of token IDs from the original text.
-        punctuation_tokens: List of token IDs for allowed punctuation marks.
-        has_prev_input: Whether there is previous input context.
-        num_beams: Number of beams for beam search.
-        beam_states: List of state dictionaries for each beam.
+    Example:
+        Original tokens: [今天, 天氣, 很, 好]
+        Punctuation: [，, 。]
+        Valid output: 今天，天氣很好。
+        Invalid: 今天天氣，，很好 (consecutive punctuation)
+        Invalid: 今天很好 (skipped token)
     """
 
     def __init__(
@@ -87,56 +35,133 @@ class BeamSearchCustomLogitsProcessor(LogitsProcessor):
         original_text_tokens: list[int],
         punctuation_tokens: list[int],
         has_prev_input: bool,
-        num_beams: int,
     ) -> None:
-        """Initialize the beam search custom logits processor.
+        """Initialize the custom logits processor.
 
         Args:
-            original_text_tokens: List of token IDs from the original text.
-            punctuation_tokens: List of token IDs for allowed punctuation marks.
-            has_prev_input: Whether there is previous input context.
-            num_beams: Number of beams for beam search.
+            original_text_tokens: Token IDs from the original text (including EOS). The last token should be the EOS token.
+            punctuation_tokens: Token IDs for allowed punctuation marks.
+            has_prev_input: If True, allows starting with punctuation (for continuing from a previous chunk). If False, must start with the first text token.
         """
-        self.original_text_tokens = original_text_tokens
-        self.punctuation_tokens = punctuation_tokens
-        self.has_prev_input = has_prev_input
-        self.num_beams = num_beams
-        self.beam_states = [{"is_first_token": True, "current_index": 0} for _ in range(num_beams)]
+        if not original_text_tokens:
+            raise ValueError("original_text_tokens cannot be empty")
 
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        """Process logits for beam search with constraints.
+        self.original_text_tokens = original_text_tokens
+        self.punctuation_tokens = set(punctuation_tokens)
+        self.has_prev_input = has_prev_input
+
+        # Store the EOS token separately for clarity
+        self.eos_token = original_text_tokens[-1]
+        # Text tokens without EOS
+        self.text_tokens_only = original_text_tokens[:-1]
+
+        # Track the prompt length to identify generated tokens
+        self.prompt_length = None
+
+        logger.debug(
+            f"Initialized CustomLogitsProcessor: "
+            f"{len(self.text_tokens_only)} text tokens, "
+            f"{len(self.punctuation_tokens)} punctuation tokens, "
+            f"has_prev_input={has_prev_input}"
+        )
+
+    def _count_generated_text_tokens(self, generated_ids: torch.LongTensor) -> int:
+        """Count how many original text tokens have been generated.
 
         Args:
-            input_ids: Input token IDs tensor for all beams.
-            scores: Logits scores tensor for all beams.
+            generated_ids: The generated token IDs (excluding prompt).
 
         Returns:
-            Modified logits tensor with only allowed tokens having valid scores.
+            Number of original text tokens that have been generated.
         """
-        batch_size, vocab_size = scores.shape
-        new_scores = torch.full_like(scores, float("-inf"))
+        count = 0
+        for token_id in generated_ids:
+            token_id_item = token_id.item()
+            if count < len(self.text_tokens_only) and token_id_item == self.text_tokens_only[count]:
+                count += 1
+        return count
 
-        for beam_idx in range(self.num_beams):
-            beam_state = self.beam_states[beam_idx]
-            beam_input_ids = input_ids[beam_idx]
+    def _get_allowed_tokens(
+        self, num_text_tokens_generated: int, last_token_id: int | None
+    ) -> set[int]:
+        """Determine which tokens are allowed based on current generation state.
 
-            if beam_state["is_first_token"]:
-                allowed_tokens = {self.original_text_tokens[beam_state["current_index"]]}
-                if self.has_prev_input:
-                    allowed_tokens.update(self.punctuation_tokens)
-                beam_state["is_first_token"] = False
-            else:
-                last_token = beam_input_ids[-1].item()
-                if last_token == self.original_text_tokens[beam_state["current_index"]]:
-                    allowed_tokens = set(self.punctuation_tokens)
-                    beam_state["current_index"] += 1
-                else:
-                    allowed_tokens = set()
+        Args:
+            num_text_tokens_generated: How many text tokens have been generated so far.
+            last_token_id: The last generated token ID, or None if this is the first token.
 
-                if beam_state["current_index"] < len(self.original_text_tokens):
-                    allowed_tokens.add(self.original_text_tokens[beam_state["current_index"]])
+        Returns:
+            Set of allowed token IDs for the next generation step.
+        """
+        allowed = set()
 
-            for token in allowed_tokens:
-                new_scores[beam_idx, token] = scores[beam_idx, token]
+        # Check if we've generated all text tokens
+        if num_text_tokens_generated >= len(self.text_tokens_only):
+            # All text tokens generated, only allow EOS or punctuation
+            allowed.add(self.eos_token)
+            allowed.update(self.punctuation_tokens)
+            return allowed
 
-        return new_scores
+        # Get the next text token that should be generated
+        next_text_token = self.text_tokens_only[num_text_tokens_generated]
+
+        if last_token_id is None:
+            # First token: must be the first text token
+            allowed.add(next_text_token)
+            # Special case: if continuing from previous chunk, can start with punctuation
+            if self.has_prev_input:
+                allowed.update(self.punctuation_tokens)
+        elif last_token_id in self.punctuation_tokens:
+            # Last token was punctuation: must generate next text token (no consecutive punctuation)
+            allowed.add(next_text_token)
+        else:
+            # Last token was a text token: can add punctuation or continue with next text token
+            allowed.add(next_text_token)
+            allowed.update(self.punctuation_tokens)
+
+        return allowed
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        """Process logits to constrain token generation.
+
+        Args:
+            input_ids: Input token IDs tensor of shape (batch_size, sequence_length).
+                Includes both the prompt and any generated tokens so far.
+            scores: Logits scores tensor of shape (batch_size, vocab_size).
+
+        Returns:
+            Modified logits tensor where only allowed tokens have valid scores,
+            all other tokens have -inf scores.
+        """
+        # We only support batch_size=1 for now
+        if input_ids.shape[0] != 1:
+            raise ValueError(f"Only batch_size=1 is supported, got {input_ids.shape[0]}")
+
+        # On first call, record the prompt length
+        if self.prompt_length is None:
+            self.prompt_length = input_ids.shape[1]
+            logger.debug(f"Recorded prompt length: {self.prompt_length}")
+
+        # Extract only the generated tokens (after the prompt)
+        generated_ids = input_ids[0, self.prompt_length :]
+
+        # Count how many text tokens have been generated
+        num_text_tokens_generated = self._count_generated_text_tokens(generated_ids)
+
+        # Get the last generated token (if any)
+        last_token_id = generated_ids[-1].item() if len(generated_ids) > 0 else None
+
+        # Determine allowed tokens
+        allowed_tokens = self._get_allowed_tokens(num_text_tokens_generated, last_token_id)
+
+        # Create mask: -inf for disallowed tokens, keep original scores for allowed tokens
+        mask = torch.full_like(scores, float("-inf"))
+        for token_id in allowed_tokens:
+            mask[:, token_id] = scores[:, token_id]
+
+        logger.debug(
+            f"Generated {num_text_tokens_generated}/{len(self.text_tokens_only)} text tokens, "
+            f"last_token={last_token_id}, allowed_tokens={len(allowed_tokens)}"
+        )
+
+        return mask

@@ -4,10 +4,7 @@ import argparse
 import logging
 import re
 
-from llm_punctuator.punctuator import (
-    PATH_TO_TRANSFORMERS_PUNCTUATOR,
-    TransformersAutoPunctuator,
-)
+from llm_punctuator.punctuator import TransformersLLMPunctuator
 
 logging.basicConfig(level=logging.INFO)
 
@@ -17,16 +14,15 @@ def get_args() -> argparse.Namespace:
 
     Returns:
         Parsed command line arguments containing model path, text input,
-        chunk size, number of beams, and language settings.
+        chunk size, and language settings.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-m",
         "--model_name_or_path",
         type=str,
-        choices=PATH_TO_TRANSFORMERS_PUNCTUATOR.keys(),
-        required=True,
-        help="Model name or path to the model",
+        default="Qwen/Qwen3-1.7B",
+        help="Model name or path to the model. Default: Qwen/Qwen3-1.7B",
     )
     text_group = parser.add_mutually_exclusive_group(required=True)
     text_group.add_argument("--file", type=str, help="Path to the file")
@@ -34,8 +30,14 @@ def get_args() -> argparse.Namespace:
     parser.add_argument(
         "-c", "--chunk_size", type=int, default=50, help="Chunk size for processing. Default: 50"
     )
-    parser.add_argument("--num_beams", type=int, default=1, help="Number of beams for beam search")
-    parser.add_argument("-l", "--language", type=str, choices=["zh"], default="zh")
+    parser.add_argument(
+        "-l",
+        "--language",
+        type=str,
+        choices=["zh", "en"],
+        default="zh",
+        help="Language: zh (Chinese) or en (English). Default: zh",
+    )
 
     args = parser.parse_args()
     return args
@@ -44,9 +46,8 @@ def get_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = get_args()
 
-    punctuator = TransformersAutoPunctuator.from_pretrained(args.model_name_or_path, args.language)
-    if args.language == "zh":
-        punctuations = "，。？！、；"
+    # Load the punctuator (no language needed at initialization)
+    punctuator = TransformersLLMPunctuator(args.model_name_or_path)
 
     if args.file:
         with open(args.file, encoding="utf-8") as f:
@@ -55,12 +56,17 @@ if __name__ == "__main__":
         text = args.text
     logging.info(f"Original text: {text}")
 
-    # remove space between chinese characters
-    clean_text = re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", text)
+    # Remove space between chinese characters (only for Chinese)
+    if args.language == "zh":
+        clean_text = re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", text)
+    else:
+        clean_text = text
 
     logging.info(f"Clean text: {clean_text}")
+
+    # Language and punctuations are now handled automatically by add_punctuation
     result = punctuator.add_punctuation(
-        clean_text, punctuations, chunk_size=args.chunk_size, num_beams=args.num_beams
+        clean_text, language=args.language, chunk_size=args.chunk_size
     )
 
     print(result)
