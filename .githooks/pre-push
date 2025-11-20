@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Pre-push Hook
+# This hook runs linting checks before allowing a push
+# If linting fails, the push will be rejected
+
+echo "🔍 Running linting checks before push..."
+echo ""
+
+# Run the lint script
+if ! ./bin/lint.sh; then
+    echo ""
+    echo "❌ Push rejected: Linting checks failed!"
+    echo ""
+    echo "Please fix the linting issues and try again:"
+    echo "  1. Run './bin/fix.sh' to auto-fix issues"
+    echo "  2. Or manually fix the reported issues"
+    echo "  3. Commit your changes"
+    echo "  4. Try pushing again"
+    exit 1
+fi
+
+echo ""
+echo "✅ Linting checks passed! Proceeding with push..."
+exit 0
