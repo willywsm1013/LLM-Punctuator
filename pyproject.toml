@@ -44,6 +44,7 @@ select = [
     "UP",  # pyupgrade
     "ANN", # flake8-annotations (type hints)
     "D",   # pydocstyle (docstrings)
+    "T20", # flake8-print (forbid print statements)
 ]
 ignore = [
     "E501", # line too long (handled by formatter)
