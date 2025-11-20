@@ -5,9 +5,9 @@
 set -e
 
 echo "🔍 Running ruff check..."
-ruff check . --fix
+ruff check llm_punctuator --fix
 
 echo "✨ Running ruff format..."
-ruff format .
+ruff format llm_punctuator
 
 echo "✅ Code formatting complete!"
