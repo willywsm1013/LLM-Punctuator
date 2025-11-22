@@ -8,23 +8,19 @@ import torch
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessorList
 
-from llm_punctuator.items import Message, Role
 from llm_punctuator.logits_processor import CustomLogitsProcessor
+from llm_punctuator.schema import Message, Role
 
-from .base import LLMPunctuator
 from .prompt import EN_SYSTEM_PROMPT, ZH_SYSTEM_PROMPT
+from .schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
 
 # Disable tokenizers parallelism to avoid fork warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 logger = logging.getLogger(__name__)
 
-# Default punctuation marks for different languages
-ZH_PUNCTUATIONS = "，。？！、；："
-EN_PUNCTUATIONS = ",.?!;:'"
 
-
-class TransformersLLMPunctuator(LLMPunctuator):
+class TransformersLLMPunctuator:
     """Base class for transformer-based LLM punctuators.
 
     This class provides common functionality for all transformer-based punctuators,

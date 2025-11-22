@@ -4,6 +4,10 @@ from enum import Enum
 
 from pydantic import BaseModel
 
+# Default punctuation marks for different languages
+ZH_PUNCTUATIONS = "，。？！、；："
+EN_PUNCTUATIONS = ",.?!;:'"
+
 
 class Role(str, Enum):
     """Chat message role enumeration."""
