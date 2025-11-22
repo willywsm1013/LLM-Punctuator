@@ -1,6 +1,6 @@
 # LLM Punctuator
 
-This repo tries to use LLM as a punctuator by constraining the next predicting tokens.
+Add punctuation to unpunctuated text (ASR outputs, transcripts) using LLM with constrained generation to preserve original content
 
 ## Table of Contents
 
