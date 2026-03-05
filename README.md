@@ -60,6 +60,44 @@ This package supports any HuggingFace model with chat template support. The foll
 **Recommended:**
 * **Qwen/Qwen3-1.7B** (Default, best balance of speed and quality)
 
+## Server
+
+Run as an HTTP server:
+
+### Direct
+```bash
+python -m llm_punctuator
+```
+
+### With custom model
+```bash
+MODEL_NAME_OR_PATH=Qwen/Qwen3-1.7B PORT=8000 python -m llm_punctuator
+```
+
+### Docker
+```bash
+docker build -t llm-punctuator .
+docker run -p 8000:8000 -e MODEL_NAME_OR_PATH=Qwen/Qwen3-1.7B llm-punctuator
+```
+
+### API Example
+```bash
+curl -X POST http://localhost:8000/api/v1/punctuate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "今天天氣很好出門記得帶傘", "language": "zh"}'
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL_NAME_OR_PATH` | `Qwen/Qwen3-1.7B` | HuggingFace model name or path |
+| `DEFAULT_LANGUAGE` | `zh` | Default language |
+| `DEFAULT_CHUNK_SIZE` | `50` | Default chunk size |
+| `HOST` | `0.0.0.0` | Listen address |
+| `PORT` | `8000` | Listen port |
+| `LOG_LEVEL` | `info` | Log level |
+
 ## Development
 
 ### Install Git Hooks
