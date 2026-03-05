@@ -80,7 +80,19 @@ docker build -t llm-punctuator .
 docker run -p 8000:8000 -e MODEL_NAME_OR_PATH=Qwen/Qwen3-1.7B llm-punctuator
 ```
 
-### API Example
+### Client Script
+```bash
+# 中文（預設）
+python scripts/client.py "你好世界今天天氣真好"
+
+# 英文
+python scripts/client.py "hello world how are you" --language en
+
+# 指定 server
+python scripts/client.py "你好世界" --base-url http://localhost:9000
+```
+
+### curl
 ```bash
 curl -X POST http://localhost:8000/api/v1/punctuate \
   -H "Content-Type: application/json" \
