@@ -1,13 +1,16 @@
 """FastAPI server for LLM Punctuator."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
+
+from llm_punctuator.schema import PunctuateRequest, PunctuateResponse
 
 logger = logging.getLogger(__name__)
 
@@ -68,3 +71,32 @@ async def info() -> dict:
         "supported_languages": ["zh", "en"],
         "version": "0.1.0",
     }
+
+
+router = APIRouter(prefix="/api/v1")
+
+
+@router.post("/punctuate")
+async def punctuate(request: Request, body: PunctuateRequest) -> PunctuateResponse:
+    """Add punctuation to text."""
+    punctuator = getattr(request.app.state, "punctuator", None)
+    if punctuator is None:
+        return JSONResponse(
+            {"detail": "Model not loaded"}, status_code=503
+        )
+
+    settings = get_settings()
+    result = await asyncio.to_thread(
+        punctuator.add_punctuation,
+        body.text,
+        language=body.language,
+        chunk_size=body.chunk_size,
+    )
+    return PunctuateResponse(
+        text=result,
+        language=body.language,
+        model=settings.model_name_or_path,
+    )
+
+
+app.include_router(router)
