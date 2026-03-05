@@ -48,9 +48,7 @@ async def _load_model(app: FastAPI) -> None:
     settings = get_settings()
     logger.info("Loading model: %s", settings.model_name_or_path)
     try:
-        punctuator = await asyncio.to_thread(
-            TransformersLLMPunctuator, settings.model_name_or_path
-        )
+        punctuator = await asyncio.to_thread(TransformersLLMPunctuator, settings.model_name_or_path)
         app.state.punctuator = punctuator
         app.state.model_status = ModelStatus.ready
         logger.info("Model loaded successfully")
@@ -78,9 +76,7 @@ async def health(request: Request) -> JSONResponse:
     status = getattr(request.app.state, "model_status", ModelStatus.failed)
     if status is ModelStatus.ready:
         return JSONResponse({"status": "healthy", "model_status": status.value})
-    return JSONResponse(
-        {"status": status.value, "model_status": status.value}, status_code=503
-    )
+    return JSONResponse({"status": status.value, "model_status": status.value}, status_code=503)
 
 
 @app.get("/info")
