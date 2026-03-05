@@ -2,7 +2,7 @@
 
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Default punctuation marks for different languages
 ZH_PUNCTUATIONS = "，。？！、；："
@@ -27,3 +27,19 @@ class Message(BaseModel):
 
     role: str
     content: str
+
+
+class PunctuateRequest(BaseModel):
+    """Request model for punctuation endpoint."""
+
+    text: str = Field(..., min_length=1)
+    language: str = Field(default="zh", pattern="^(zh|en)$")
+    chunk_size: int = Field(default=50, gt=0)
+
+
+class PunctuateResponse(BaseModel):
+    """Response model for punctuation endpoint."""
+
+    text: str
+    language: str
+    model: str
