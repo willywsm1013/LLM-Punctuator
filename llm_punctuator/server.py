@@ -2,9 +2,9 @@
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
-from typing import AsyncIterator
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -81,9 +81,7 @@ async def punctuate(request: Request, body: PunctuateRequest) -> PunctuateRespon
     """Add punctuation to text."""
     punctuator = getattr(request.app.state, "punctuator", None)
     if punctuator is None:
-        return JSONResponse(
-            {"detail": "Model not loaded"}, status_code=503
-        )
+        return JSONResponse({"detail": "Model not loaded"}, status_code=503)
 
     settings = get_settings()
     result = await asyncio.to_thread(
