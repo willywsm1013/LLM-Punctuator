@@ -13,15 +13,15 @@ class TestHealth:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
-        assert data["model_loaded"] is True
+        assert data["model_status"] == "ready"
 
     def test_returns_503_when_model_not_loaded(self, client_no_model: TestClient) -> None:
         response = client_no_model.get("/health")
 
         assert response.status_code == 503
         data = response.json()
-        assert data["status"] == "unhealthy"
-        assert data["model_loaded"] is False
+        assert data["status"] == "failed"
+        assert data["model_status"] == "failed"
 
 
 class TestInfo:

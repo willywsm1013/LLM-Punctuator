@@ -4,6 +4,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from enum import Enum
 from functools import lru_cache
 
 from fastapi import APIRouter, FastAPI, Request
@@ -13,6 +14,14 @@ from pydantic_settings import BaseSettings
 from llm_punctuator.server.schema import PunctuateRequest, PunctuateResponse
 
 logger = logging.getLogger(__name__)
+
+
+class ModelStatus(str, Enum):
+    """Model lifecycle states."""
+
+    loading = "loading"
+    ready = "ready"
+    failed = "failed"
 
 
 class Settings(BaseSettings):
@@ -32,22 +41,32 @@ def get_settings() -> Settings:
     return Settings()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Load model on startup, cleanup on shutdown."""
+async def _load_model(app: FastAPI) -> None:
+    """Load model in background thread."""
     from llm_punctuator.punctuator import TransformersLLMPunctuator
 
     settings = get_settings()
     logger.info("Loading model: %s", settings.model_name_or_path)
     try:
-        app.state.punctuator = TransformersLLMPunctuator(settings.model_name_or_path)
-        app.state.model_loaded = True
+        punctuator = await asyncio.to_thread(
+            TransformersLLMPunctuator, settings.model_name_or_path
+        )
+        app.state.punctuator = punctuator
+        app.state.model_status = ModelStatus.ready
         logger.info("Model loaded successfully")
     except Exception:
         logger.exception("Failed to load model")
-        app.state.punctuator = None
-        app.state.model_loaded = False
+        app.state.model_status = ModelStatus.failed
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start model loading in background, server accepts requests immediately."""
+    app.state.punctuator = None
+    app.state.model_status = ModelStatus.loading
+    load_task = asyncio.create_task(_load_model(app))
     yield
+    load_task.cancel()
 
 
 app = FastAPI(title="LLM Punctuator", version="0.1.0", lifespan=lifespan)
@@ -56,10 +75,12 @@ app = FastAPI(title="LLM Punctuator", version="0.1.0", lifespan=lifespan)
 @app.get("/health")
 async def health(request: Request) -> JSONResponse:
     """Health check endpoint."""
-    model_loaded = getattr(request.app.state, "model_loaded", False)
-    if model_loaded:
-        return JSONResponse({"status": "healthy", "model_loaded": True})
-    return JSONResponse({"status": "unhealthy", "model_loaded": False}, status_code=503)
+    status = getattr(request.app.state, "model_status", ModelStatus.failed)
+    if status is ModelStatus.ready:
+        return JSONResponse({"status": "healthy", "model_status": status.value})
+    return JSONResponse(
+        {"status": status.value, "model_status": status.value}, status_code=503
+    )
 
 
 @app.get("/info")

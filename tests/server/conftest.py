@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from llm_punctuator.server import app
+from llm_punctuator.server.app import ModelStatus
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ def mock_punctuator() -> MagicMock:
 def client(mock_punctuator: MagicMock) -> TestClient:
     """Test client with a loaded mock punctuator."""
     app.state.punctuator = mock_punctuator
-    app.state.model_loaded = True
+    app.state.model_status = ModelStatus.ready
     return TestClient(app)
 
 
@@ -28,5 +29,5 @@ def client(mock_punctuator: MagicMock) -> TestClient:
 def client_no_model() -> TestClient:
     """Test client with no model loaded."""
     app.state.punctuator = None
-    app.state.model_loaded = False
+    app.state.model_status = ModelStatus.failed
     return TestClient(app, raise_server_exceptions=False)

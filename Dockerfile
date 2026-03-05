@@ -1,12 +1,14 @@
 FROM python:3.10-slim
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY llm_punctuator/ llm_punctuator/
 
-RUN pip install --no-cache-dir .
+RUN uv sync --frozen --no-dev --no-editable
 
 EXPOSE 8000
 
-CMD ["python", "-m", "llm_punctuator.server"]
+CMD [".venv/bin/python", "-m", "llm_punctuator.server"]
