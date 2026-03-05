@@ -1,0 +1,7 @@
+__pycache__
+*.pyc
+.git
+.ruff_cache
+tests/
+docs/
+*.egg-info
