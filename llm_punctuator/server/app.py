@@ -10,7 +10,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings
 
-from llm_punctuator.schema import PunctuateRequest, PunctuateResponse
+from llm_punctuator.server.schema import PunctuateRequest, PunctuateResponse
 
 logger = logging.getLogger(__name__)
 

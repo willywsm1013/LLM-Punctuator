@@ -1,4 +1,4 @@
-"""Entry point for running the server with `python -m llm_punctuator`."""
+"""Entry point for running the server with `python -m llm_punctuator.server`."""
 
 import uvicorn
 

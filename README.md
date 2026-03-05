@@ -66,12 +66,12 @@ Run as an HTTP server:
 
 ### Direct
 ```bash
-python -m llm_punctuator
+python -m llm_punctuator.server
 ```
 
 ### With custom model
 ```bash
-MODEL_NAME_OR_PATH=Qwen/Qwen3-1.7B PORT=8000 python -m llm_punctuator
+MODEL_NAME_OR_PATH=Qwen/Qwen3-1.7B PORT=8000 python -m llm_punctuator.server
 ```
 
 ### Docker
