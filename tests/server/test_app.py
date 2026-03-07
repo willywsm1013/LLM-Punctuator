@@ -1,5 +1,6 @@
 """Tests for FastAPI server endpoints."""
 
+from importlib.metadata import version
 from unittest.mock import MagicMock
 
 import pytest
@@ -40,7 +41,7 @@ class TestInfo:
         data = response.json()
         assert data["model"] == "Qwen/Qwen3-1.7B"
         assert data["supported_languages"] == ["zh", "en"]
-        assert data["version"] == "0.1.0"
+        assert data["version"] == version("llm-punctuator")
 
 
 class TestPunctuate:

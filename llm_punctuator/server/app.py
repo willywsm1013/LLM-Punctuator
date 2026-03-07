@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
 from functools import lru_cache
+from importlib.metadata import version
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -69,7 +70,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     load_task.cancel()
 
 
-app = FastAPI(title="LLM Punctuator", version="0.1.0", lifespan=lifespan)
+_VERSION = version("llm-punctuator")
+
+app = FastAPI(title="LLM Punctuator", version=_VERSION, lifespan=lifespan)
 
 
 @app.get("/health")
@@ -88,7 +91,7 @@ async def info() -> dict:
     return {
         "model": settings.model_name_or_path,
         "supported_languages": ["zh", "en"],
-        "version": "0.1.0",
+        "version": _VERSION,
     }
 
 
