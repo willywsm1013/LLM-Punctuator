@@ -102,32 +102,44 @@ def compute_metrics(
 
 
 def load_file_pairs(
-    reference_dir: Path,
+    benchmark_dir: Path,
     output_dir: Path,
-) -> list[tuple[Path, Path]]:
-    """Load matching file pairs from reference and output directories.
+) -> dict[str, list[tuple[Path, Path]]]:
+    """Load matching file pairs from benchmark category subdirectories.
+
+    Scans subdirectories of benchmark_dir as categories (e.g. asr/, news/, wiki/).
+    For each category, matches reference files with output files by relative path.
 
     Args:
-        reference_dir: Directory containing reference files.
-        output_dir: Directory containing model output files.
+        benchmark_dir: Directory containing category subdirectories with reference files.
+        output_dir: Directory containing model output files in matching structure.
 
     Returns:
-        Sorted list of (reference_path, output_path) tuples.
+        Dict mapping category name to sorted list of (reference_path, output_path) tuples.
 
     Raises:
         FileNotFoundError: If an output file is missing for a reference file.
     """
-    ref_files = sorted(reference_dir.glob("*.txt"))
-    pairs: list[tuple[Path, Path]] = []
+    result: dict[str, list[tuple[Path, Path]]] = {}
 
-    for ref_file in ref_files:
-        out_file = output_dir / ref_file.name
-        if not out_file.exists():
-            msg = f"Output file not found: {ref_file.name}"
-            raise FileNotFoundError(msg)
-        pairs.append((ref_file, out_file))
+    categories = sorted(d for d in benchmark_dir.iterdir() if d.is_dir())
+    for category_dir in categories:
+        category = category_dir.name
+        ref_files = sorted(category_dir.glob("*.txt"))
+        if not ref_files:
+            continue
 
-    return pairs
+        pairs: list[tuple[Path, Path]] = []
+        for ref_file in ref_files:
+            out_file = output_dir / category / ref_file.name
+            if not out_file.exists():
+                msg = f"Output file not found: {category}/{ref_file.name}"
+                raise FileNotFoundError(msg)
+            pairs.append((ref_file, out_file))
+
+        result[category] = pairs
+
+    return result
 
 
 def produce_markdown_table(metrics: dict[str, dict[str, float]]) -> str:
