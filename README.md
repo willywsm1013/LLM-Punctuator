@@ -117,6 +117,7 @@ curl -X POST http://localhost:8000/api/v1/punctuate \
 | `text` | string | Yes | Text to punctuate (min 1 char) |
 | `language` | string | No | `"zh"` or `"en"` (default from settings) |
 | `chunk_size` | int | No | Chunk size for long text (default from settings) |
+| `punctuations` | string | No | Allowed punctuation characters (e.g. `"，。？！"`) |
 
 ### Environment Variables
 

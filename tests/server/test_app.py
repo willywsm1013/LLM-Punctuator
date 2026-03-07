@@ -74,7 +74,7 @@ class TestPunctuate:
         assert data["text"] == expected_text
         assert data["language"] == language
         mock_punctuator.add_punctuation.assert_called_once_with(
-            text, language=language, chunk_size=chunk_size
+            text, language=language, chunk_size=chunk_size, punctuations=None
         )
 
     def test_uses_settings_defaults_when_not_specified(
@@ -90,7 +90,24 @@ class TestPunctuate:
         data = response.json()
         assert data["language"] == "zh"
         mock_punctuator.add_punctuation.assert_called_once_with(
-            "你好世界", language="zh", chunk_size=200
+            "你好世界", language="zh", chunk_size=200, punctuations=None
+        )
+
+    def test_passes_custom_punctuations(
+        self,
+        client: TestClient,
+        mock_punctuator: MagicMock,
+    ) -> None:
+        mock_punctuator.add_punctuation.return_value = "你好，世界。"
+
+        response = client.post(
+            "/api/v1/punctuate",
+            json={"text": "你好世界", "punctuations": "，。"},
+        )
+
+        assert response.status_code == 200
+        mock_punctuator.add_punctuation.assert_called_once_with(
+            "你好世界", language="zh", chunk_size=200, punctuations="，。"
         )
 
     @pytest.mark.parametrize(
@@ -98,8 +115,10 @@ class TestPunctuate:
         [
             {"text": ""},
             {"text": "hello", "language": "fr"},
+            {"text": "hello", "punctuations": "abc"},
+            {"text": "hello", "punctuations": ""},
         ],
-        ids=["empty_text", "unsupported_language"],
+        ids=["empty_text", "unsupported_language", "invalid_punctuations", "empty_punctuations"],
     )
     def test_rejects_invalid_input_with_422(
         self, client: TestClient, payload: dict
