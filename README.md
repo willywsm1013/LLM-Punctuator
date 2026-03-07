@@ -9,6 +9,7 @@ Add punctuation to unpunctuated text (ASR outputs, transcripts) using LLM with c
   - [Using pip](#using-pip)
 - [Usage](#usage)
   - [Supported Models](#supported-models)
+- [Benchmark Results](#benchmark-results)
 - [Development](#development)
   - [Install Git Hooks](#install-git-hooks)
   - [Conventional Commits Format](#conventional-commits-format)
@@ -135,6 +136,38 @@ cp .env.example .env
 | `HOST` | `0.0.0.0` | Listen address |
 | `PORT` | `8000` | Listen port |
 | `LOG_LEVEL` | `info` | Log level |
+
+## Benchmark Results
+
+Reference data is in `data/benchmark/reference/` with 3 test samples covering different text styles (news, speech, conversation). Input text is derived automatically by stripping punctuation from references.
+
+### Step 1: Generate Model Output
+
+```bash
+python scripts/run_benchmark.py --output-dir results/my_model
+```
+
+Options:
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output-dir` | (required) | Directory to save output files |
+| `-m, --model` | `Qwen/Qwen3-1.7B` | Model name or path |
+| `-l, --language` | `zh` | Language (`zh` or `en`) |
+| `-c, --chunk-size` | `50` | Chunk size for processing |
+
+### Step 2: Evaluate
+
+```bash
+python scripts/evaluate_benchmark.py --model-output results/my_model
+```
+
+Output example:
+
+| Metric    | Overall | ， | 。 | ？ |
+|-----------|---------|------|------|------|
+| Precision |         |      |      |      |
+| Recall    |         |      |      |      |
+| F1-score  |         |      |      |      |
 
 ## Development
 
