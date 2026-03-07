@@ -68,9 +68,13 @@ def main() -> int:
     for ref_path, out_path in pairs:
         try:
             ref_text = ref_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as e:
+            print(f"Error: Cannot decode reference file {ref_path}: {e}", file=sys.stderr)
+            return 1
+        try:
             out_text = out_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as e:
-            print(f"Error: Encoding error in {e.reason}: {ref_path}", file=sys.stderr)
+            print(f"Error: Cannot decode output file {out_path}: {e}", file=sys.stderr)
             return 1
 
         ref_plain, ref_labels = extract_punctuation_labels(ref_text)
