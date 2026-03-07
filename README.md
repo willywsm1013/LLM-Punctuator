@@ -60,6 +60,82 @@ This package supports any HuggingFace model with chat template support. The foll
 **Recommended:**
 * **Qwen/Qwen3-1.7B** (Default, best balance of speed and quality)
 
+## Server
+
+Run as an HTTP server:
+
+### Direct
+```bash
+python -m llm_punctuator.server
+```
+
+### With custom model
+```bash
+MODEL_NAME_OR_PATH=Qwen/Qwen3-1.7B PORT=8000 python -m llm_punctuator.server
+```
+
+### Docker
+```bash
+docker build -t llm-punctuator .
+docker run -p 8000:8000 -e MODEL_NAME_OR_PATH=Qwen/Qwen3-1.7B llm-punctuator
+```
+
+### Client Script
+```bash
+# 中文（預設）
+python scripts/client.py "你好世界今天天氣真好"
+
+# 英文
+python scripts/client.py "hello world how are you" --language en
+
+# 指定 server
+python scripts/client.py "你好世界" --base-url http://localhost:9000
+```
+
+### API Endpoints
+
+#### Health Check
+```bash
+curl http://localhost:8000/health
+```
+Returns `200` when model is ready, `503` when loading or failed.
+
+#### Server Info
+```bash
+curl http://localhost:8000/info
+```
+
+#### Punctuate
+```bash
+curl -X POST http://localhost:8000/api/v1/punctuate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "今天天氣很好出門記得帶傘", "language": "zh"}'
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `text` | string | Yes | Text to punctuate (min 1 char) |
+| `language` | string | No | `"zh"` or `"en"` (default from settings) |
+| `chunk_size` | int | No | Chunk size for long text (default from settings) |
+| `punctuations` | string | No | Allowed punctuation characters (e.g. `"，。？！"`) |
+
+### Environment Variables
+
+See [.env.example](.env.example) for a template. Copy it and modify as needed:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL_NAME_OR_PATH` | `Qwen/Qwen3-1.7B` | HuggingFace model name or path |
+| `DEFAULT_LANGUAGE` | `zh` | Default language |
+| `DEFAULT_CHUNK_SIZE` | `200` | Default chunk size |
+| `HOST` | `0.0.0.0` | Listen address |
+| `PORT` | `8000` | Listen port |
+| `LOG_LEVEL` | `info` | Log level |
+
 ## Development
 
 ### Install Git Hooks

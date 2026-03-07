@@ -21,5 +21,17 @@ if ! ./bin/lint.sh; then
 fi
 
 echo ""
-echo "✅ Linting checks passed! Proceeding with push..."
+echo "🧪 Running unit tests..."
+echo ""
+
+if ! python -m pytest tests/ -q; then
+    echo ""
+    echo "❌ Push rejected: Unit tests failed!"
+    echo ""
+    echo "Please fix the failing tests and try again."
+    exit 1
+fi
+
+echo ""
+echo "✅ All checks passed! Proceeding with push..."
 exit 0

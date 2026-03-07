@@ -8,6 +8,11 @@ from pydantic import BaseModel
 ZH_PUNCTUATIONS = "，。？！、；："
 EN_PUNCTUATIONS = ",.?!;:'"
 
+# All allowed punctuation characters (superset of defaults)
+ALLOWED_PUNCTUATIONS = frozenset(
+    ZH_PUNCTUATIONS + EN_PUNCTUATIONS + "—–…·～" + "（）「」『』《》〈〉" + '-()""' + "''[]{}/"
+)
+
 
 class Role(str, Enum):
     """Chat message role enumeration."""

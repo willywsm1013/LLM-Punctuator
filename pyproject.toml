@@ -13,11 +13,17 @@ dependencies = [
     "tqdm",
     "pydantic",
     "accelerate",
+    "fastapi",
+    "uvicorn",
+    "pydantic-settings",
 ]
 
 [project.optional-dependencies]
 dev = [
     "ruff>=0.1.0",
+    "httpx",
+    "pytest",
+    "pytest-asyncio",
 ]
 
 [build-system]
@@ -27,6 +33,9 @@ build-backend = "hatchling.build"
 [tool.uv]
 dev-dependencies = [
     "ruff>=0.1.0",
+    "httpx",
+    "pytest",
+    "pytest-asyncio",
 ]
 
 [tool.ruff]
