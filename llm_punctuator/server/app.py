@@ -27,6 +27,8 @@ class ModelStatus(str, Enum):
 class Settings(BaseSettings):
     """Server configuration via environment variables."""
 
+    model_config = {"env_file": ".env"}
+
     model_name_or_path: str = "Qwen/Qwen3-1.7B"
     default_language: str = "zh"
     default_chunk_size: int = 200

@@ -101,11 +101,17 @@ curl -X POST http://localhost:8000/api/v1/punctuate \
 
 ### Environment Variables
 
+See [.env.example](.env.example) for a template. Copy it and modify as needed:
+
+```bash
+cp .env.example .env
+```
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MODEL_NAME_OR_PATH` | `Qwen/Qwen3-1.7B` | HuggingFace model name or path |
 | `DEFAULT_LANGUAGE` | `zh` | Default language |
-| `DEFAULT_CHUNK_SIZE` | `50` | Default chunk size |
+| `DEFAULT_CHUNK_SIZE` | `200` | Default chunk size |
 | `HOST` | `0.0.0.0` | Listen address |
 | `PORT` | `8000` | Listen port |
 | `LOG_LEVEL` | `info` | Log level |
