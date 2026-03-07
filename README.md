@@ -139,7 +139,16 @@ cp .env.example .env
 
 ## Benchmark Results
 
-Reference data is in `data/benchmark/reference/` with 3 test samples covering different text styles (news, speech, conversation). Input text is derived automatically by stripping punctuation from references.
+Reference data is organized by category under `data/benchmark/`:
+
+```
+data/benchmark/
+├── asr/    # ASR transcripts (speech, conversation)
+├── news/   # News articles
+└── wiki/   # Wikipedia-style encyclopedia entries
+```
+
+Each category contains at least 5 reference samples. Input text is derived automatically by stripping punctuation from references.
 
 ### Step 1: Generate Model Output
 
@@ -155,19 +164,15 @@ Options:
 | `-l, --language` | `zh` | Language (`zh` or `en`) |
 | `-c, --chunk-size` | `50` | Chunk size for processing |
 
+Output mirrors the category structure: `results/my_model/{asr,news,wiki}/`.
+
 ### Step 2: Evaluate
 
 ```bash
 python scripts/evaluate_benchmark.py --model-output results/my_model
 ```
 
-Output example:
-
-| Metric    | Overall | ， | 。 | ？ |
-|-----------|---------|------|------|------|
-| Precision |         |      |      |      |
-| Recall    |         |      |      |      |
-| F1-score  |         |      |      |      |
+Outputs per-category metrics tables followed by an overall summary.
 
 ## Development
 
