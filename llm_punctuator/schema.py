@@ -10,12 +10,7 @@ EN_PUNCTUATIONS = ",.?!;:'"
 
 # All allowed punctuation characters (superset of defaults)
 ALLOWED_PUNCTUATIONS = frozenset(
-    ZH_PUNCTUATIONS
-    + EN_PUNCTUATIONS
-    + "—–…·～"
-    + "（）「」『』《》〈〉"
-    + "-()\"\""
-    + "''[]{}/"
+    ZH_PUNCTUATIONS + EN_PUNCTUATIONS + "—–…·～" + "（）「」『』《》〈〉" + '-()""' + "''[]{}/"
 )
 
 
