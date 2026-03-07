@@ -23,6 +23,14 @@ class TestHealth:
         assert data["status"] == "failed"
         assert data["model_status"] == "failed"
 
+    def test_returns_503_when_model_loading(self, client_loading: TestClient) -> None:
+        response = client_loading.get("/health")
+
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "loading"
+        assert data["model_status"] == "loading"
+
 
 class TestInfo:
     def test_returns_model_and_supported_languages(self, client: TestClient) -> None:
@@ -30,9 +38,9 @@ class TestInfo:
 
         assert response.status_code == 200
         data = response.json()
-        assert "model" in data
+        assert data["model"] == "Qwen/Qwen3-1.7B"
         assert data["supported_languages"] == ["zh", "en"]
-        assert "version" in data
+        assert data["version"] == "0.1.0"
 
 
 class TestPunctuate:
@@ -68,6 +76,22 @@ class TestPunctuate:
             text, language=language, chunk_size=chunk_size
         )
 
+    def test_uses_settings_defaults_when_not_specified(
+        self,
+        client: TestClient,
+        mock_punctuator: MagicMock,
+    ) -> None:
+        mock_punctuator.add_punctuation.return_value = "你好，世界。"
+
+        response = client.post("/api/v1/punctuate", json={"text": "你好世界"})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["language"] == "zh"
+        mock_punctuator.add_punctuation.assert_called_once_with(
+            "你好世界", language="zh", chunk_size=200
+        )
+
     @pytest.mark.parametrize(
         "payload",
         [
@@ -87,3 +111,4 @@ class TestPunctuate:
         response = client_no_model.post("/api/v1/punctuate", json={"text": "hello"})
 
         assert response.status_code == 503
+        assert response.json()["detail"] == "Model not loaded"

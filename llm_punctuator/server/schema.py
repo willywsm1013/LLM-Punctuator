@@ -7,8 +7,8 @@ class PunctuateRequest(BaseModel):
     """Request model for punctuation endpoint."""
 
     text: str = Field(..., min_length=1)
-    language: str = Field(default="zh", pattern="^(zh|en)$")
-    chunk_size: int = Field(default=50, gt=0)
+    language: str | None = Field(default=None, pattern="^(zh|en)$")
+    chunk_size: int | None = Field(default=None, gt=0)
 
 
 class PunctuateResponse(BaseModel):

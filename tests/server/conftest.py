@@ -27,7 +27,15 @@ def client(mock_punctuator: MagicMock) -> TestClient:
 
 @pytest.fixture
 def client_no_model() -> TestClient:
-    """Test client with no model loaded."""
+    """Test client with model load failed."""
     app.state.punctuator = None
     app.state.model_status = ModelStatus.failed
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def client_loading() -> TestClient:
+    """Test client with model still loading."""
+    app.state.punctuator = None
+    app.state.model_status = ModelStatus.loading
     return TestClient(app, raise_server_exceptions=False)

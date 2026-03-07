@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     model_name_or_path: str = "Qwen/Qwen3-1.7B"
     default_language: str = "zh"
-    default_chunk_size: int = 50
+    default_chunk_size: int = 200
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "info"
@@ -101,15 +101,17 @@ async def punctuate(request: Request, body: PunctuateRequest) -> PunctuateRespon
         return JSONResponse({"detail": "Model not loaded"}, status_code=503)
 
     settings = get_settings()
+    language = body.language or settings.default_language
+    chunk_size = body.chunk_size or settings.default_chunk_size
     result = await asyncio.to_thread(
         punctuator.add_punctuation,
         body.text,
-        language=body.language,
-        chunk_size=body.chunk_size,
+        language=language,
+        chunk_size=chunk_size,
     )
     return PunctuateResponse(
         text=result,
-        language=body.language,
+        language=language,
         model=settings.model_name_or_path,
     )
 
