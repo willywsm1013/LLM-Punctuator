@@ -158,19 +158,44 @@ def produce_markdown_table(metrics: dict[str, dict[str, float]]) -> str:
     punct_cols = sorted(k for k in metrics if k != "overall")
     columns.extend(punct_cols)
 
+    # Use fixed column width for consistent alignment
+    # "Overall" is 7 chars; punctuation marks may be fullwidth (2 display cols)
+    col_width = 7  # display width for all columns
+
+    def _display_width(s: str) -> int:
+        """Approximate display width accounting for fullwidth characters."""
+        w = 0
+        for ch in s:
+            if "\u2e80" <= ch <= "\U0001f9ff":
+                w += 2
+            else:
+                w += 1
+        return w
+
+    def _pad_center(s: str, width: int) -> str:
+        """Center-pad string accounting for display width."""
+        dw = _display_width(s)
+        pad = width - dw
+        if pad <= 0:
+            return s
+        left = pad // 2
+        right = pad - left
+        return " " * left + s + " " * right
+
     # Header
     header_names = {"overall": "Overall"}
     header_names.update({p: p for p in punct_cols})
-    header = "| Metric    | " + " | ".join(header_names[c] for c in columns) + " |"
+    header_cells = [_pad_center(header_names[c], col_width) for c in columns]
+    header = "| Metric    | " + " | ".join(header_cells) + " |"
 
     # Separator
-    sep = "|-----------|" + "|".join("-" * (len(header_names[c]) + 2) for c in columns) + "|"
+    sep = "|-----------|-" + "-|-".join("-" * col_width for _ in columns) + "-|"
 
     # Data rows
     rows = []
     for metric_name, key in [("Precision", "precision"), ("Recall", "recall"), ("F1-score", "f1")]:
         values = [f"{metrics[c][key]:.2f}" for c in columns]
-        padded = [v.center(len(header_names[c])) for v, c in zip(values, columns, strict=True)]
+        padded = [_pad_center(v, col_width) for v in values]
         row = f"| {metric_name:<9} | " + " | ".join(padded) + " |"
         rows.append(row)
 
