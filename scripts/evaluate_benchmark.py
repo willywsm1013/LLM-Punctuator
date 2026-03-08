@@ -59,8 +59,8 @@ def _collect_labels(
         except UnicodeDecodeError as e:
             return f"Cannot decode output file {out_path}: {e}"
 
-        ref_plain, ref_lab = extract_punctuation_labels(ref_text)
-        out_plain, out_lab = extract_punctuation_labels(out_text)
+        ref_plain, ref_lab = extract_punctuation_labels(ref_text.strip())
+        out_plain, out_lab = extract_punctuation_labels(out_text.strip())
 
         if ref_plain != out_plain:
             return (

@@ -30,6 +30,8 @@ def extract_punctuation_labels(text: str) -> tuple[str, list[str | None]]:
             if plain_chars and labels[-1] is None:
                 labels[-1] = char
             # If there's already a punctuation at this position, skip (keep first)
+        elif char in "\n\r":
+            continue
         else:
             plain_chars.append(char)
             labels.append(None)
