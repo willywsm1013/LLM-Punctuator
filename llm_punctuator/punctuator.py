@@ -208,7 +208,7 @@ class TransformersLLMPunctuator:
                 input_ids, attention_mask, logits_processor_list, max_length
             )
 
-            generated_tokens = generated_tokens.squeeze(0).tolist()
+            generated_tokens = generated_tokens.tolist()
 
             # Remove trailing punctuation from non-final chunks to prevent consecutive
             # punctuation at chunk boundaries

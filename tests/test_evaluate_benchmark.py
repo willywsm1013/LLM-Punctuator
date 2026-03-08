@@ -136,47 +136,75 @@ class TestComputeMetrics:
 
 
 class TestLoadFilePairs:
-    """Test loading and pairing files from directories."""
+    """Test loading and pairing files from category subdirectories."""
 
-    def test_matching_files_are_paired(self, tmp_path: Path) -> None:
-        ref_dir = tmp_path / "reference"
+    def test_matching_files_are_paired_by_category(self, tmp_path: Path) -> None:
+        benchmark_dir = tmp_path / "benchmark"
         out_dir = tmp_path / "output"
-        ref_dir.mkdir()
-        out_dir.mkdir()
+        (benchmark_dir / "news").mkdir(parents=True)
+        (out_dir / "news").mkdir(parents=True)
 
-        (ref_dir / "01_news.txt").write_text("你好，世界。", encoding="utf-8")
-        (out_dir / "01_news.txt").write_text("你好，世界。", encoding="utf-8")
+        (benchmark_dir / "news" / "01.txt").write_text("你好，世界。", encoding="utf-8")
+        (out_dir / "news" / "01.txt").write_text("你好，世界。", encoding="utf-8")
 
-        pairs = load_file_pairs(ref_dir, out_dir)
+        result = load_file_pairs(benchmark_dir, out_dir)
 
-        assert len(pairs) == 1
-        assert pairs[0][0] == ref_dir / "01_news.txt"
-        assert pairs[0][1] == out_dir / "01_news.txt"
+        assert "news" in result
+        assert len(result["news"]) == 1
+        assert result["news"][0][0] == benchmark_dir / "news" / "01.txt"
+        assert result["news"][0][1] == out_dir / "news" / "01.txt"
+
+    def test_multiple_categories(self, tmp_path: Path) -> None:
+        benchmark_dir = tmp_path / "benchmark"
+        out_dir = tmp_path / "output"
+        for cat in ["asr", "news", "wiki"]:
+            (benchmark_dir / cat).mkdir(parents=True)
+            (out_dir / cat).mkdir(parents=True)
+            (benchmark_dir / cat / "01.txt").write_text("test", encoding="utf-8")
+            (out_dir / cat / "01.txt").write_text("test", encoding="utf-8")
+
+        result = load_file_pairs(benchmark_dir, out_dir)
+
+        assert sorted(result.keys()) == ["asr", "news", "wiki"]
 
     def test_missing_output_file_raises_error(self, tmp_path: Path) -> None:
-        ref_dir = tmp_path / "reference"
+        benchmark_dir = tmp_path / "benchmark"
         out_dir = tmp_path / "output"
-        ref_dir.mkdir()
-        out_dir.mkdir()
+        (benchmark_dir / "asr").mkdir(parents=True)
+        out_dir.mkdir(parents=True)
 
-        (ref_dir / "01_news.txt").write_text("你好，世界。", encoding="utf-8")
+        (benchmark_dir / "asr" / "01.txt").write_text("你好，世界。", encoding="utf-8")
 
-        with pytest.raises(FileNotFoundError, match="01_news.txt"):
-            load_file_pairs(ref_dir, out_dir)
+        with pytest.raises(FileNotFoundError, match="asr/01.txt"):
+            load_file_pairs(benchmark_dir, out_dir)
 
     def test_files_sorted_by_name(self, tmp_path: Path) -> None:
-        ref_dir = tmp_path / "reference"
+        benchmark_dir = tmp_path / "benchmark"
         out_dir = tmp_path / "output"
-        ref_dir.mkdir()
-        out_dir.mkdir()
+        (benchmark_dir / "news").mkdir(parents=True)
+        (out_dir / "news").mkdir(parents=True)
 
-        for name in ["03_conv.txt", "01_news.txt", "02_speech.txt"]:
-            (ref_dir / name).write_text("test", encoding="utf-8")
-            (out_dir / name).write_text("test", encoding="utf-8")
+        for name in ["03.txt", "01.txt", "02.txt"]:
+            (benchmark_dir / "news" / name).write_text("test", encoding="utf-8")
+            (out_dir / "news" / name).write_text("test", encoding="utf-8")
 
-        pairs = load_file_pairs(ref_dir, out_dir)
+        result = load_file_pairs(benchmark_dir, out_dir)
 
-        assert [p[0].name for p in pairs] == ["01_news.txt", "02_speech.txt", "03_conv.txt"]
+        assert [p[0].name for p in result["news"]] == ["01.txt", "02.txt", "03.txt"]
+
+    def test_empty_category_skipped(self, tmp_path: Path) -> None:
+        benchmark_dir = tmp_path / "benchmark"
+        out_dir = tmp_path / "output"
+        (benchmark_dir / "empty_cat").mkdir(parents=True)
+        (benchmark_dir / "news").mkdir(parents=True)
+        (out_dir / "news").mkdir(parents=True)
+        (benchmark_dir / "news" / "01.txt").write_text("test", encoding="utf-8")
+        (out_dir / "news" / "01.txt").write_text("test", encoding="utf-8")
+
+        result = load_file_pairs(benchmark_dir, out_dir)
+
+        assert "empty_cat" not in result
+        assert "news" in result
 
 
 class TestProduceMarkdownTable:

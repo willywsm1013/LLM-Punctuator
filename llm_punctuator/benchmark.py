@@ -30,6 +30,8 @@ def extract_punctuation_labels(text: str) -> tuple[str, list[str | None]]:
             if plain_chars and labels[-1] is None:
                 labels[-1] = char
             # If there's already a punctuation at this position, skip (keep first)
+        elif char in "\n\r":
+            continue
         else:
             plain_chars.append(char)
             labels.append(None)
@@ -102,32 +104,44 @@ def compute_metrics(
 
 
 def load_file_pairs(
-    reference_dir: Path,
+    benchmark_dir: Path,
     output_dir: Path,
-) -> list[tuple[Path, Path]]:
-    """Load matching file pairs from reference and output directories.
+) -> dict[str, list[tuple[Path, Path]]]:
+    """Load matching file pairs from benchmark category subdirectories.
+
+    Scans subdirectories of benchmark_dir as categories (e.g. asr/, news/, wiki/).
+    For each category, matches reference files with output files by relative path.
 
     Args:
-        reference_dir: Directory containing reference files.
-        output_dir: Directory containing model output files.
+        benchmark_dir: Directory containing category subdirectories with reference files.
+        output_dir: Directory containing model output files in matching structure.
 
     Returns:
-        Sorted list of (reference_path, output_path) tuples.
+        Dict mapping category name to sorted list of (reference_path, output_path) tuples.
 
     Raises:
         FileNotFoundError: If an output file is missing for a reference file.
     """
-    ref_files = sorted(reference_dir.glob("*.txt"))
-    pairs: list[tuple[Path, Path]] = []
+    result: dict[str, list[tuple[Path, Path]]] = {}
 
-    for ref_file in ref_files:
-        out_file = output_dir / ref_file.name
-        if not out_file.exists():
-            msg = f"Output file not found: {ref_file.name}"
-            raise FileNotFoundError(msg)
-        pairs.append((ref_file, out_file))
+    categories = sorted(d for d in benchmark_dir.iterdir() if d.is_dir())
+    for category_dir in categories:
+        category = category_dir.name
+        ref_files = sorted(category_dir.glob("*.txt"))
+        if not ref_files:
+            continue
 
-    return pairs
+        pairs: list[tuple[Path, Path]] = []
+        for ref_file in ref_files:
+            out_file = output_dir / category / ref_file.name
+            if not out_file.exists():
+                msg = f"Output file not found: {category}/{ref_file.name}"
+                raise FileNotFoundError(msg)
+            pairs.append((ref_file, out_file))
+
+        result[category] = pairs
+
+    return result
 
 
 def produce_markdown_table(metrics: dict[str, dict[str, float]]) -> str:
@@ -144,19 +158,44 @@ def produce_markdown_table(metrics: dict[str, dict[str, float]]) -> str:
     punct_cols = sorted(k for k in metrics if k != "overall")
     columns.extend(punct_cols)
 
+    # Use fixed column width for consistent alignment
+    # "Overall" is 7 chars; punctuation marks may be fullwidth (2 display cols)
+    col_width = 7  # display width for all columns
+
+    def _display_width(s: str) -> int:
+        """Approximate display width accounting for fullwidth characters."""
+        w = 0
+        for ch in s:
+            if "\u2e80" <= ch <= "\U0001f9ff":
+                w += 2
+            else:
+                w += 1
+        return w
+
+    def _pad_center(s: str, width: int) -> str:
+        """Center-pad string accounting for display width."""
+        dw = _display_width(s)
+        pad = width - dw
+        if pad <= 0:
+            return s
+        left = pad // 2
+        right = pad - left
+        return " " * left + s + " " * right
+
     # Header
     header_names = {"overall": "Overall"}
     header_names.update({p: p for p in punct_cols})
-    header = "| Metric    | " + " | ".join(header_names[c] for c in columns) + " |"
+    header_cells = [_pad_center(header_names[c], col_width) for c in columns]
+    header = "| Metric    | " + " | ".join(header_cells) + " |"
 
     # Separator
-    sep = "|-----------|" + "|".join("-" * (len(header_names[c]) + 2) for c in columns) + "|"
+    sep = "|-----------|-" + "-|-".join("-" * col_width for _ in columns) + "-|"
 
     # Data rows
     rows = []
     for metric_name, key in [("Precision", "precision"), ("Recall", "recall"), ("F1-score", "f1")]:
         values = [f"{metrics[c][key]:.2f}" for c in columns]
-        padded = [v.center(len(header_names[c])) for v, c in zip(values, columns, strict=True)]
+        padded = [_pad_center(v, col_width) for v in values]
         row = f"| {metric_name:<9} | " + " | ".join(padded) + " |"
         rows.append(row)
 
