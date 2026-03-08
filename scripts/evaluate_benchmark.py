@@ -65,7 +65,7 @@ def _collect_labels(
         if ref_plain != out_plain:
             return (
                 f"Mismatch between reference and output files: "
-                f"plain text differs in {ref_path.name}"
+                f"plain text differs in {ref_path}"
             )
 
         ref_labels.extend(ref_lab)
