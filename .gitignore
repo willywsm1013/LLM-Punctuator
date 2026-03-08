@@ -170,6 +170,9 @@ cython_debug/
 # Hugging Face
 .hf_token
 
+# Benchmark results
+results/
+
 # Project docs (generated)
 docs/merge-request/
 docs/quality-review/
