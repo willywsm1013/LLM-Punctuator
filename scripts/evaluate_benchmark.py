@@ -63,10 +63,7 @@ def _collect_labels(
         out_plain, out_lab = extract_punctuation_labels(out_text.strip())
 
         if ref_plain != out_plain:
-            return (
-                f"Mismatch between reference and output files: "
-                f"plain text differs in {ref_path}"
-            )
+            return f"Mismatch between reference and output files: plain text differs in {ref_path}"
 
         ref_labels.extend(ref_lab)
         pred_labels.extend(out_lab)
