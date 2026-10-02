@@ -194,7 +194,9 @@ class TransformersLLMPunctuator:
             attention_mask = inputs["attention_mask"].to(self.device)
 
             has_prev_input = chunk_idx != 0
-            max_length = input_ids.shape[1] + int(len(chunk) * 1.2)
+            # Worst case: a mark in every gap between text tokens, plus a leading
+            # mark on continued chunks. A smaller budget silently drops text.
+            max_length = input_ids.shape[1] + 2 * len(chunk) - 1 + int(has_prev_input)
 
             logits_processor = CustomLogitsProcessor(
                 chunk + [self.tokenizer.eos_token_id],
