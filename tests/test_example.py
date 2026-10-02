@@ -29,4 +29,5 @@ class TestCleanZhText:
         ],
     )
     def test_clean_zh_text(self, text: str, expected: str) -> None:
+        """Breaks and spaces between CJK characters go; a break between ASCII words becomes a space."""
         assert clean_zh_text(text) == expected

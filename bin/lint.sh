@@ -5,9 +5,9 @@
 set -e
 
 echo "🔍 Running ruff check (without auto-fix)..."
-ruff check llm_punctuator scripts
+ruff check llm_punctuator scripts tests
 
 echo "🔍 Checking code formatting..."
-ruff format --check llm_punctuator scripts
+ruff format --check llm_punctuator scripts tests
 
 echo "✅ All linting checks passed!"

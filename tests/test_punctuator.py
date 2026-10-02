@@ -18,15 +18,19 @@ class CharTokenizer:
     bos_token_id = None
 
     def encode(self, text: str) -> list[int]:
+        """Map each character to its code point."""
         return [ord(c) for c in text]
 
     def decode(self, tokens: list[int], skip_special_tokens: bool = True) -> str:
+        """Map code points back to characters, dropping EOS."""
         return "".join(chr(t) for t in tokens if t != EOS_ID)
 
     def apply_chat_template(self, messages: list[dict], **kwargs: object) -> str:
+        """Join the messages into one tagged string."""
         return "".join(f"[{m['role']}]{m['content']}<end>" for m in messages)
 
     def __call__(self, text: str, return_tensors: str) -> dict[str, torch.Tensor]:
+        """Encode text as a batch of one."""
         ids = torch.tensor([self.encode(text)])
         return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
 
@@ -44,6 +48,7 @@ class PunctuationGreedyModel:
         max_length: int,
         **kwargs: object,
     ) -> torch.Tensor:
+        """Greedy decoding with the processors applied, up to max_length or EOS."""
         scores = torch.ones(1, self.vocab_size)
         scores[0, EOS_ID] = 0.0
         scores[0, [ord(p) for p in ZH_PUNCTUATIONS]] = 2.0
@@ -61,6 +66,7 @@ class PunctuationGreedyModel:
 
 @pytest.fixture
 def punctuator() -> TransformersLLMPunctuator:
+    """Punctuator built on the fake tokenizer and model."""
     with (
         patch("llm_punctuator.punctuator.AutoTokenizer") as tokenizer_cls,
         patch("llm_punctuator.punctuator.AutoModelForCausalLM") as model_cls,
@@ -74,6 +80,7 @@ def punctuator() -> TransformersLLMPunctuator:
 def test_add_punctuation_keeps_all_text_when_every_position_is_punctuated(
     punctuator: TransformersLLMPunctuator, chunk_size: int
 ) -> None:
+    """No text is dropped even when every allowed position gets a mark."""
     text = "今天天氣很好我們去公園散步"
 
     result = punctuator.add_punctuation(text, language="zh", chunk_size=chunk_size)

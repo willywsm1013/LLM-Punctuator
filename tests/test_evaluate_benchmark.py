@@ -16,6 +16,7 @@ class TestExtractPunctuationLabels:
     """Test extracting punctuation labels from punctuated text."""
 
     def test_simple_sentence_with_comma_and_period(self) -> None:
+        """Each mark is labeled on the gap after the character it follows."""
         text = "今天天氣很好，適合出門。"
         plain, labels = extract_punctuation_labels(text)
 
@@ -27,6 +28,7 @@ class TestExtractPunctuationLabels:
         assert labels == expected_labels
 
     def test_question_mark(self) -> None:
+        """A question mark is labeled like any other mark."""
         text = "你好嗎？"
         plain, labels = extract_punctuation_labels(text)
 
@@ -34,6 +36,7 @@ class TestExtractPunctuationLabels:
         assert labels == [None, None, "？"]
 
     def test_no_punctuation(self) -> None:
+        """Text without marks yields only empty labels."""
         text = "今天天氣很好"
         plain, labels = extract_punctuation_labels(text)
 
@@ -41,6 +44,7 @@ class TestExtractPunctuationLabels:
         assert labels == [None, None, None, None, None, None]
 
     def test_multiple_punctuation_types(self) -> None:
+        """Different marks in one text keep their own labels."""
         text = "你好！今天天氣很好，要出門嗎？"
         plain, labels = extract_punctuation_labels(text)
 
@@ -49,6 +53,7 @@ class TestExtractPunctuationLabels:
         assert labels == [None, "！", None, None, None, None, None, "，", None, None, None, "？"]
 
     def test_empty_string(self) -> None:
+        """Empty text yields no characters and no labels."""
         text = ""
         plain, labels = extract_punctuation_labels(text)
 
@@ -56,6 +61,7 @@ class TestExtractPunctuationLabels:
         assert labels == []
 
     def test_consecutive_punctuation_keeps_first(self) -> None:
+        """Two marks in one gap keep only the first."""
         # Edge case: two punctuation marks in a row (unlikely but handle gracefully)
         text = "你好！？世界"
         plain, labels = extract_punctuation_labels(text)
@@ -70,6 +76,7 @@ class TestComputeMetrics:
     """Test Precision/Recall/F1 computation."""
 
     def test_perfect_match(self) -> None:
+        """Identical labels score 1.0 on every metric."""
         ref_labels = [None, "，", None, None, "。"]
         pred_labels = [None, "，", None, None, "。"]
 
@@ -80,6 +87,7 @@ class TestComputeMetrics:
         assert metrics["overall"]["f1"] == pytest.approx(1.0)
 
     def test_no_predictions(self) -> None:
+        """No predicted marks give zero recall and zero precision."""
         ref_labels = [None, "，", None, None, "。"]
         pred_labels = [None, None, None, None, None]
 
@@ -90,6 +98,7 @@ class TestComputeMetrics:
         assert metrics["overall"]["precision"] == pytest.approx(0.0)
 
     def test_all_false_positives(self) -> None:
+        """Marks predicted where the reference has none give zero scores."""
         ref_labels = [None, None, None]
         pred_labels = [None, "，", None]
 
@@ -100,6 +109,7 @@ class TestComputeMetrics:
         assert metrics["overall"]["recall"] == pytest.approx(0.0)
 
     def test_partial_match_with_per_punctuation_breakdown(self) -> None:
+        """A wrong mark counts against both marks involved, overall and per mark."""
         # ref: 今天，天氣。很好？
         ref_labels = [None, "，", None, "。", None, "？"]
         # pred: 今天，天氣，很好？  (句號 predicted as 逗號)
@@ -124,10 +134,12 @@ class TestComputeMetrics:
         assert metrics["？"]["recall"] == pytest.approx(1.0)
 
     def test_mismatched_lengths_raises_error(self) -> None:
+        """Label lists of different lengths raise ValueError."""
         with pytest.raises(ValueError, match="length"):
             compute_metrics([None, "，"], [None])
 
     def test_both_empty(self) -> None:
+        """Two empty label lists score 0.0."""
         metrics = compute_metrics([], [])
 
         assert metrics["overall"]["precision"] == pytest.approx(0.0)
@@ -139,6 +151,7 @@ class TestLoadFilePairs:
     """Test loading and pairing files from category subdirectories."""
 
     def test_matching_files_are_paired_by_category(self, tmp_path: Path) -> None:
+        """A reference and an output with the same category and name are paired."""
         benchmark_dir = tmp_path / "benchmark"
         out_dir = tmp_path / "output"
         (benchmark_dir / "news").mkdir(parents=True)
@@ -155,6 +168,7 @@ class TestLoadFilePairs:
         assert result["news"][0][1] == out_dir / "news" / "01.txt"
 
     def test_multiple_categories(self, tmp_path: Path) -> None:
+        """Every category directory becomes a key."""
         benchmark_dir = tmp_path / "benchmark"
         out_dir = tmp_path / "output"
         for cat in ["asr", "news", "wiki"]:
@@ -168,6 +182,7 @@ class TestLoadFilePairs:
         assert sorted(result.keys()) == ["asr", "news", "wiki"]
 
     def test_missing_output_file_raises_error(self, tmp_path: Path) -> None:
+        """A reference without an output file raises FileNotFoundError naming it."""
         benchmark_dir = tmp_path / "benchmark"
         out_dir = tmp_path / "output"
         (benchmark_dir / "asr").mkdir(parents=True)
@@ -179,6 +194,7 @@ class TestLoadFilePairs:
             load_file_pairs(benchmark_dir, out_dir)
 
     def test_files_sorted_by_name(self, tmp_path: Path) -> None:
+        """Pairs within a category are sorted by file name."""
         benchmark_dir = tmp_path / "benchmark"
         out_dir = tmp_path / "output"
         (benchmark_dir / "news").mkdir(parents=True)
@@ -193,6 +209,7 @@ class TestLoadFilePairs:
         assert [p[0].name for p in result["news"]] == ["01.txt", "02.txt", "03.txt"]
 
     def test_empty_category_skipped(self, tmp_path: Path) -> None:
+        """A category with no reference files is left out."""
         benchmark_dir = tmp_path / "benchmark"
         out_dir = tmp_path / "output"
         (benchmark_dir / "empty_cat").mkdir(parents=True)
@@ -211,6 +228,7 @@ class TestProduceMarkdownTable:
     """Test markdown table output."""
 
     def test_table_has_correct_format(self) -> None:
+        """The table has a header, a separator and one row per metric."""
         metrics = {
             "overall": {"precision": 0.85, "recall": 0.83, "f1": 0.84},
             "，": {"precision": 0.82, "recall": 0.80, "f1": 0.81},
@@ -229,6 +247,7 @@ class TestProduceMarkdownTable:
         assert "F1-score" in lines[4]
 
     def test_table_is_valid_markdown(self) -> None:
+        """Every line is a pipe-delimited row and the separator has only dashes."""
         metrics = {
             "overall": {"precision": 1.0, "recall": 1.0, "f1": 1.0},
         }
