@@ -3,10 +3,9 @@
 import argparse
 import logging
 import re
+from pathlib import Path
 
 from llm_punctuator.punctuator import TransformersLLMPunctuator
-
-logging.basicConfig(level=logging.INFO)
 
 
 def get_args() -> argparse.Namespace:
@@ -28,6 +27,9 @@ def get_args() -> argparse.Namespace:
     text_group.add_argument("--file", type=str, help="Path to the file")
     text_group.add_argument("--text", type=str, help="Text to punctuate")
     parser.add_argument(
+        "-o", "--output_file", type=str, help="Path to the output file. Default: print to stdout"
+    )
+    parser.add_argument(
         "-c", "--chunk_size", type=int, default=50, help="Chunk size for processing. Default: 50"
     )
     parser.add_argument(
@@ -38,6 +40,7 @@ def get_args() -> argparse.Namespace:
         default="zh",
         help="Language: zh (Chinese) or en (English). Default: zh",
     )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
     return args
@@ -45,6 +48,7 @@ def get_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = get_args()
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
 
     # Load the punctuator (no language needed at initialization)
     punctuator = TransformersLLMPunctuator(args.model_name_or_path)
@@ -56,9 +60,10 @@ if __name__ == "__main__":
         text = args.text
     logging.info(f"Original text: {text}")
 
-    # Remove space between chinese characters (only for Chinese)
+    # Remove line breaks and space between chinese characters (only for Chinese)
     if args.language == "zh":
-        clean_text = re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", text)
+        clean_text = text.replace("\r", "").replace("\n", "")
+        clean_text = re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", clean_text)
     else:
         clean_text = text
 
@@ -69,4 +74,9 @@ if __name__ == "__main__":
         clean_text, language=args.language, chunk_size=args.chunk_size
     )
 
-    print(result)
+    if args.output_file is None:
+        print(result)
+    else:
+        output_file = Path(args.output_file)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(result, encoding="utf-8")
