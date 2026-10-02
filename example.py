@@ -46,6 +46,21 @@ def get_args() -> argparse.Namespace:
     return args
 
 
+def clean_zh_text(text: str) -> str:
+    """Remove line breaks and whitespace between Chinese characters.
+
+    A line break becomes a space, so non-CJK tokens on either side stay separated.
+
+    Args:
+        text: Raw Chinese text, possibly spanning multiple lines.
+
+    Returns:
+        Single-line text with no whitespace between two CJK characters.
+    """
+    clean_text = text.replace("\r", " ").replace("\n", " ").strip()
+    return re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", clean_text)
+
+
 if __name__ == "__main__":
     args = get_args()
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
@@ -60,10 +75,8 @@ if __name__ == "__main__":
         text = args.text
     logging.info(f"Original text: {text}")
 
-    # Remove line breaks and space between chinese characters (only for Chinese)
     if args.language == "zh":
-        clean_text = text.replace("\r", "").replace("\n", "")
-        clean_text = re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", clean_text)
+        clean_text = clean_zh_text(text)
     else:
         clean_text = text
 
