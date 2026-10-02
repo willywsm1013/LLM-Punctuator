@@ -93,30 +93,15 @@ class CustomLogitsProcessor(LogitsProcessor):
         Returns:
             Set of allowed token IDs for the next generation step.
         """
-        allowed = set()
-
-        # Check if we've generated all text tokens
-        if num_text_tokens_generated >= len(self.text_tokens_only):
-            # All text tokens generated, only allow EOS or punctuation
-            allowed.add(self.eos_token)
-            allowed.update(self.punctuation_tokens)
-            return allowed
-
-        # Get the next text token that should be generated
-        next_text_token = self.text_tokens_only[num_text_tokens_generated]
+        # EOS is the token after the last text token, so the no-consecutive-punctuation
+        # rule also holds at the end of the text.
+        allowed = {self.original_text_tokens[num_text_tokens_generated]}
 
         if last_token_id is None:
-            # First token: must be the first text token
-            allowed.add(next_text_token)
-            # Special case: if continuing from previous chunk, can start with punctuation
+            # Continuing from a previous chunk may start with punctuation
             if self.has_prev_input:
                 allowed.update(self.punctuation_tokens)
-        elif last_token_id in self.punctuation_tokens:
-            # Last token was punctuation: must generate next text token (no consecutive punctuation)
-            allowed.add(next_text_token)
-        else:
-            # Last token was a text token: can add punctuation or continue with next text token
-            allowed.add(next_text_token)
+        elif last_token_id not in self.punctuation_tokens:
             allowed.update(self.punctuation_tokens)
 
         return allowed
