@@ -168,7 +168,7 @@ class TestLoadFilePairs:
         assert result["news"][0][1] == out_dir / "news" / "01.txt"
 
     def test_multiple_categories(self, tmp_path: Path) -> None:
-        """Every category directory becomes a key."""
+        """Each category with reference files becomes its own key."""
         benchmark_dir = tmp_path / "benchmark"
         out_dir = tmp_path / "output"
         for cat in ["asr", "news", "wiki"]:
