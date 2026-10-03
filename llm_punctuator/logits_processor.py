@@ -50,8 +50,6 @@ class CustomLogitsProcessor(LogitsProcessor):
         self.punctuation_tokens = set(punctuation_tokens)
         self.has_prev_input = has_prev_input
 
-        # Store the EOS token separately for clarity
-        self.eos_token = original_text_tokens[-1]
         # Text tokens without EOS
         self.text_tokens_only = original_text_tokens[:-1]
 
