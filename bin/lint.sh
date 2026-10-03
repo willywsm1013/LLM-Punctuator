@@ -4,10 +4,12 @@
 
 set -e
 
+uv run --frozen --only-dev ruff --version
+
 echo "🔍 Running ruff check (without auto-fix)..."
-ruff check llm_punctuator scripts tests
+uv run --frozen --only-dev ruff check llm_punctuator scripts tests
 
 echo "🔍 Checking code formatting..."
-ruff format --check llm_punctuator scripts tests
+uv run --frozen --only-dev ruff format --check llm_punctuator scripts tests
 
 echo "✅ All linting checks passed!"
