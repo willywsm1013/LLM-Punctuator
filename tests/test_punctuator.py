@@ -4,11 +4,13 @@ from unittest.mock import patch
 
 import pytest
 import torch
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from llm_punctuator.punctuator import TransformersLLMPunctuator
-from llm_punctuator.schema import ZH_PUNCTUATIONS
+from llm_punctuator.schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
 
 EOS_ID = 0
+QWEN_MODEL = "Qwen/Qwen3-1.7B"
 
 
 class CharTokenizer:
@@ -76,6 +78,48 @@ def punctuator() -> TransformersLLMPunctuator:
         return TransformersLLMPunctuator("fake-model")
 
 
+class FirstMarkModel:
+    """Fake LM that picks the first mark of the language whenever a mark is allowed."""
+
+    device = torch.device("cpu")
+
+    def __init__(self, tokenizer: PreTrainedTokenizerBase) -> None:
+        """Score the first zh and en marks above text, and text above EOS."""
+        self.eos_token_id = tokenizer.eos_token_id
+        self.scores = torch.ones(1, len(tokenizer))
+        self.scores[0, self.eos_token_id] = 0.0
+        for punctuations in (ZH_PUNCTUATIONS, EN_PUNCTUATIONS):
+            self.scores[0, tokenizer.encode(punctuations[0])[-1]] = 2.0
+
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        logits_processor: list,
+        max_length: int,
+        **kwargs: object,
+    ) -> torch.Tensor:
+        """Greedy decoding with the processors applied, up to max_length or EOS."""
+        ids = input_ids
+        while ids.shape[1] < max_length:
+            step = self.scores.clone()
+            for processor in logits_processor:
+                step = processor(ids, step)
+            next_id = step.argmax(dim=-1, keepdim=True)
+            ids = torch.cat([ids, next_id], dim=1)
+            if next_id.item() == self.eos_token_id:
+                break
+        return ids
+
+
+@pytest.fixture(scope="module")
+def qwen_punctuator() -> TransformersLLMPunctuator:
+    """Punctuator built on the Qwen3 tokenizer and the first-mark fake model."""
+    tokenizer = AutoTokenizer.from_pretrained(QWEN_MODEL)
+    with patch("llm_punctuator.punctuator.AutoModelForCausalLM") as model_cls:
+        model_cls.from_pretrained.return_value = FirstMarkModel(tokenizer)
+        return TransformersLLMPunctuator(QWEN_MODEL)
+
+
 @pytest.mark.parametrize("chunk_size", [50, 5], ids=["single_chunk", "continued_chunks"])
 def test_add_punctuation_keeps_all_text_when_every_position_is_punctuated(
     punctuator: TransformersLLMPunctuator, chunk_size: int
@@ -86,3 +130,26 @@ def test_add_punctuation_keeps_all_text_when_every_position_is_punctuated(
     result = punctuator.add_punctuation(text, language="zh", chunk_size=chunk_size)
 
     assert "".join(c for c in result if c not in ZH_PUNCTUATIONS) == text
+
+
+@pytest.mark.parametrize(
+    ("text", "language", "chunk_size", "expected"),
+    [
+        ("鄉東至水社大", "zh", 50, "鄉，東，至，水，社，大，"),
+        ("鄉東至水社大", "zh", 4, "鄉，東，至，水，社，大，"),
+        ("hello world how are you", "en", 50, "hello, world, how, are, you,"),
+        ("hello world how are you", "en", 2, "hello, world, how, are, you,"),
+    ],
+    ids=["zh_single_chunk", "zh_continued_chunks", "en_single_chunk", "en_continued_chunks"],
+)
+def test_add_punctuation_keeps_trailing_mark_when_every_gap_is_punctuated(
+    qwen_punctuator: TransformersLLMPunctuator,
+    text: str,
+    language: str,
+    chunk_size: int,
+    expected: str,
+) -> None:
+    """The trailing mark survives even when every gap in the last chunk gets a mark."""
+    result = qwen_punctuator.add_punctuation(text, language=language, chunk_size=chunk_size)
+
+    assert result == expected
