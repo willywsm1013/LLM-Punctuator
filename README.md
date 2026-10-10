@@ -119,6 +119,7 @@ curl -X POST http://localhost:8000/api/v1/punctuate \
 | `language` | string | No | `"zh"` or `"en"` (default from settings) |
 | `chunk_size` | int | No | Chunk size for long text (default from settings) |
 | `punctuations` | string | No | Allowed punctuation characters (e.g. `"，。？！"`) |
+| `k` | int | No | Most mark positions decided per forward pass; `-1` decides the whole chunk (default `-1`) |
 
 ### Environment Variables
 
@@ -163,6 +164,7 @@ Options:
 | `-m, --model` | `Qwen/Qwen3-1.7B` | Model name or path |
 | `-l, --language` | `zh` | Language (`zh` or `en`) |
 | `-c, --chunk-size` | `50` | Chunk size for processing |
+| `--k` | `-1` | Most mark positions decided per forward pass; `-1` decides the whole chunk |
 
 Output mirrors the category structure: `results/my_model/{asr,news,wiki}/`.
 
