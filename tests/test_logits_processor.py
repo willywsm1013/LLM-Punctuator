@@ -29,7 +29,7 @@ def test_allowed_tokens_after_all_text_allow_at_most_one_mark(
     processor: CustomLogitsProcessor, last_token_id: int, expected: set[int]
 ) -> None:
     """After the last text token, a mark is allowed only if the previous token is not one."""
-    allowed = processor._get_allowed_tokens(len(TEXT), last_token_id)
+    allowed = processor.allowed_tokens(len(TEXT), last_token_id)
 
     assert allowed == expected
 
