@@ -7,7 +7,7 @@ import re
 
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessorList
+from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
 from llm_punctuator.logits_processor import CustomLogitsProcessor
 from llm_punctuator.schema import Message, Role
@@ -114,6 +114,7 @@ class TransformersLLMPunctuator:
         language: str = "zh",
         system_prompt: str | None = None,
         chunk_size: int = 200,
+        k: int = -1,
     ) -> str:
         """Add punctuation to text using the LLM.
 
@@ -124,13 +125,18 @@ class TransformersLLMPunctuator:
             system_prompt: Custom system prompt. If None, uses default for language.
             chunk_size: Number of tokens per chunk for processing. A chunk that would end inside
                 a segment runs on to the end of that segment.
+            k: Most positions where a mark may go to decide per forward pass. -1 decides the
+                whole rest of the chunk. Default: -1.
 
         Returns:
             Text with punctuation added.
 
         Raises:
-            ValueError: If the specified language is not supported.
+            ValueError: If the specified language is not supported, or k is 0 or below -1.
         """
+        if k == 0 or k < -1:
+            raise ValueError(f"k must be -1 or a positive integer, got {k}")
+
         # Select default punctuations based on language if not provided
         if punctuations is None:
             if language == "zh":
@@ -194,29 +200,16 @@ class TransformersLLMPunctuator:
 
             input_prompt = self.apply_chat_template(messages)
 
-            inputs = self.tokenizer(input_prompt, return_tensors="pt")
-            input_ids = inputs["input_ids"].to(self.device)
-            attention_mask = inputs["attention_mask"].to(self.device)
+            prompt_ids = self.tokenizer(input_prompt)["input_ids"]
 
-            has_prev_input = chunk_idx != 0
-            # Worst case: a mark in every gap between text tokens, a leading mark on
-            # continued chunks, and one trailing mark. A smaller budget silently drops output.
-            max_length = input_ids.shape[1] + 2 * len(chunk) + int(has_prev_input)
-
-            logits_processor = CustomLogitsProcessor(
+            rule = CustomLogitsProcessor(
                 chunk + [self.tokenizer.eos_token_id],
                 punctuation_tokens,
-                has_prev_input=has_prev_input,
+                has_prev_input=chunk_idx != 0,
                 unit_ends=set(itertools.accumulate(len(segment) for segment in chunk_segments)),
             )
 
-            logits_processor_list = LogitsProcessorList([logits_processor])
-
-            generated_tokens = self.greedy_search(
-                input_ids, attention_mask, logits_processor_list, max_length
-            )
-
-            generated_tokens = generated_tokens.tolist()
+            generated_tokens = self.greedy_search(prompt_ids, rule, k)
 
             # Remove trailing punctuation from non-final chunks to prevent consecutive
             # punctuation at chunk boundaries
@@ -348,34 +341,54 @@ class TransformersLLMPunctuator:
             return generated_tokens
 
     def greedy_search(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        logits_processor_list: LogitsProcessorList,
-        max_length: int,
-    ) -> torch.Tensor:
-        """Perform greedy search generation.
+        self, prompt_ids: list[int], rule: CustomLogitsProcessor, k: int
+    ) -> list[int]:
+        """Greedy decoding under the rule, deciding up to k mark positions per forward pass.
+
+        The text is known, so one forward over the tokens not yet cached plus the upcoming
+        text gives the scores at every upcoming position. Each position takes the highest
+        scoring allowed token, ties going to the lowest token ID as in step-by-step greedy
+        decoding. Where a mark wins, the text after it was fed in the wrong place: it is
+        cropped from the cache, and the next forward continues after the mark.
 
         Args:
-            input_ids: Input token IDs tensor.
-            attention_mask: Attention mask tensor.
-            logits_processor_list: List of logits processors.
-            max_length: Maximum generation length.
+            prompt_ids: Token IDs of the prompt.
+            rule: Which tokens each position allows.
+            k: Most positions where a mark may go to decide per forward. -1 for all.
 
         Returns:
-            Generated token IDs tensor.
+            Generated token IDs, without the EOS token.
         """
-        output = self.model.generate(
-            input_ids,
-            attention_mask=attention_mask,
-            logits_processor=logits_processor_list,
-            max_length=max_length,
-            do_sample=False,
-            temperature=1.0,
-            top_p=1,
-        )
-        generated_tokens = output[0][input_ids.shape[1] :]
-        if generated_tokens[-1] == self.tokenizer.eos_token_id:
-            generated_tokens = generated_tokens[:-1]
-
-        return generated_tokens
+        targets = rule.original_text_tokens
+        text_len = len(targets) - 1
+        cache = DynamicCache()
+        emitted: list[int] = []
+        pending, start = prompt_ids, 0
+        while True:
+            upcoming = sorted(p for p in rule.mark_positions if p >= start)
+            end = upcoming[k - 1] if 0 < k <= len(upcoming) else text_len
+            fed = pending + targets[start:end]
+            cached = cache.get_seq_length()
+            logits = self.model(
+                input_ids=torch.tensor([fed], device=self.device),
+                past_key_values=cache,
+                use_cache=True,
+            ).logits[0, len(pending) - 1 :]
+            candidates = sorted(set(targets[start : end + 1]) | rule.punctuation_tokens)
+            rows = logits[:, candidates].float().tolist()
+            for pos in range(start, end + 1):
+                score = dict(zip(candidates, rows[pos - start], strict=True))
+                allowed = sorted(rule.allowed_tokens(pos, emitted[-1] if emitted else None))
+                choice = max(allowed, key=score.__getitem__)
+                emitted.append(choice)
+                due = targets[pos]
+                if choice != due:
+                    cache.crop(cached + len(pending) + pos - start)
+                    emitted.append(due)
+                    pending = [choice, due]
+                    break
+            else:
+                pending = [due]
+            if emitted[-1] == targets[-1]:
+                return emitted[:-1]
+            start = pos + 1
