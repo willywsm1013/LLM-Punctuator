@@ -15,7 +15,9 @@ VOCAB_SIZE = 100
 @pytest.fixture
 def processor() -> CustomLogitsProcessor:
     """Processor for a two-token text, starting a new chunk."""
-    return CustomLogitsProcessor(TEXT + [EOS_ID], PUNCTUATION, has_prev_input=False)
+    return CustomLogitsProcessor(
+        TEXT + [EOS_ID], PUNCTUATION, has_prev_input=False, unit_ends={1, 2}
+    )
 
 
 @pytest.mark.parametrize(

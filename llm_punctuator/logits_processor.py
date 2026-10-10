@@ -13,7 +13,7 @@ class CustomLogitsProcessor(LogitsProcessor):
 
     This processor ensures the model generates tokens in a specific pattern:
     1. Original text tokens must appear in order
-    2. Punctuation can only be inserted between text tokens
+    2. Punctuation can only be inserted where a unit of the text ends
     3. No consecutive punctuation is allowed
     4. The original text content is preserved exactly
 
@@ -35,6 +35,7 @@ class CustomLogitsProcessor(LogitsProcessor):
         original_text_tokens: list[int],
         punctuation_tokens: list[int],
         has_prev_input: bool,
+        unit_ends: set[int],
     ) -> None:
         """Initialize the custom logits processor.
 
@@ -42,6 +43,8 @@ class CustomLogitsProcessor(LogitsProcessor):
             original_text_tokens: Token IDs from the original text (including EOS). The last token should be the EOS token.
             punctuation_tokens: Token IDs for allowed punctuation marks.
             has_prev_input: If True, allows starting with punctuation (for continuing from a previous chunk). If False, must start with the first text token.
+            unit_ends: Numbers of text tokens at which a unit ends. A mark may follow only these
+                positions, so it never splits a unit. Include the text length to allow a trailing mark.
         """
         if not original_text_tokens:
             raise ValueError("original_text_tokens cannot be empty")
@@ -49,6 +52,7 @@ class CustomLogitsProcessor(LogitsProcessor):
         self.original_text_tokens = original_text_tokens
         self.punctuation_tokens = set(punctuation_tokens)
         self.has_prev_input = has_prev_input
+        self.mark_positions = (unit_ends | {0}) if has_prev_input else unit_ends
 
         # Text tokens without EOS
         self.text_tokens_only = original_text_tokens[:-1]
@@ -95,11 +99,10 @@ class CustomLogitsProcessor(LogitsProcessor):
         # rule also holds at the end of the text.
         allowed = {self.original_text_tokens[num_text_tokens_generated]}
 
-        if last_token_id is None:
-            # Continuing from a previous chunk may start with punctuation
-            if self.has_prev_input:
-                allowed.update(self.punctuation_tokens)
-        elif last_token_id not in self.punctuation_tokens:
+        if (
+            num_text_tokens_generated in self.mark_positions
+            and last_token_id not in self.punctuation_tokens
+        ):
             allowed.update(self.punctuation_tokens)
 
         return allowed

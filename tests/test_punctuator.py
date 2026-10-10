@@ -1,4 +1,4 @@
-"""Tests for TransformersLLMPunctuator generation budget."""
+"""Tests for TransformersLLMPunctuator: generation budget and where marks may go."""
 
 from unittest.mock import patch
 
@@ -31,8 +31,13 @@ class CharTokenizer:
         """Join the messages into one tagged string."""
         return "".join(f"[{m['role']}]{m['content']}<end>" for m in messages)
 
-    def __call__(self, text: str, return_tensors: str) -> dict[str, torch.Tensor]:
-        """Encode text as a batch of one."""
+    def __call__(self, text: str, return_tensors: str | None = None, **kwargs: object) -> dict:
+        """Encode text as a batch of one, or as a list with each character's offsets."""
+        if return_tensors is None:
+            return {
+                "input_ids": self.encode(text),
+                "offset_mapping": [(i, i + 1) for i in range(len(text))],
+            }
         ids = torch.tensor([self.encode(text)])
         return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
 
@@ -153,3 +158,49 @@ def test_add_punctuation_keeps_trailing_mark_when_every_gap_is_punctuated(
     result = qwen_punctuator.add_punctuation(text, language=language, chunk_size=chunk_size)
 
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "chunk_size", "expected"),
+    [
+        ("鄉東至水社大山西至", 50, "鄉，東，至，水，社，大，山西，至，"),
+        ("中共2017年", 50, "中共，2017，年，"),
+        ("鼓勵長輩", 50, "鼓，勵，長，輩，"),
+        ("他說hello world今天", 50, "他，說，hello， world，今天，"),
+        ("買iPhone15花２０１７％", 50, "買，iPhone15，花，２０１７，％，"),
+        ("口負成長新生兒", 50, "口，負，成，長新，生，兒，"),
+        ("鼓勵長輩", 2, "鼓，勵，長，輩，"),
+        ("中共2017年", 3, "中共，2017，年，"),
+        ("口負成長新生兒", 4, "口，負，成，長新，生，兒，"),
+    ],
+    ids=[
+        "merged_characters_stay_together",
+        "digit_run",
+        "rare_character",
+        "english_words_with_space",
+        "full_width_run_and_symbol",
+        "token_straddles_two_characters",
+        "chunk_cut_inside_rare_character",
+        "chunk_cut_inside_digit_run",
+        "chunk_cut_before_straddling_token",
+    ],
+)
+def test_zh_marks_never_split_a_unit(
+    qwen_punctuator: TransformersLLMPunctuator, text: str, chunk_size: int, expected: str
+) -> None:
+    """A mark goes after every token that ends a unit, and never inside a unit."""
+    result = qwen_punctuator.add_punctuation(text, language="zh", chunk_size=chunk_size)
+
+    assert result == expected
+
+
+@pytest.mark.parametrize("chunk_size", [50, 3], ids=["single_chunk", "continued_chunks"])
+def test_en_marks_go_between_tokens_as_before(
+    qwen_punctuator: TransformersLLMPunctuator, chunk_size: int
+) -> None:
+    """English keeps one mark position per token, even inside a word or number."""
+    result = qwen_punctuator.add_punctuation(
+        "the punctuator works in 2017", language="en", chunk_size=chunk_size
+    )
+
+    assert result == "the, punct,uator, works, in, ,2,0,1,7,"
