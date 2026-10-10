@@ -33,6 +33,12 @@ def get_args() -> argparse.Namespace:
         "-c", "--chunk_size", type=int, default=50, help="Chunk size for processing. Default: 50"
     )
     parser.add_argument(
+        "--k",
+        type=int,
+        default=-1,
+        help="Most mark positions to decide per forward pass; -1 for the whole chunk. Default: -1",
+    )
+    parser.add_argument(
         "-l",
         "--language",
         type=str,
@@ -84,7 +90,7 @@ if __name__ == "__main__":
 
     # Language and punctuations are now handled automatically by add_punctuation
     result = punctuator.add_punctuation(
-        clean_text, language=args.language, chunk_size=args.chunk_size
+        clean_text, language=args.language, chunk_size=args.chunk_size, k=args.k
     )
 
     if args.output_file is None:
