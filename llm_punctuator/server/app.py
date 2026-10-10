@@ -114,6 +114,7 @@ async def punctuate(request: Request, body: PunctuateRequest) -> PunctuateRespon
         language=language,
         chunk_size=chunk_size,
         punctuations=body.punctuations,
+        k=body.k,
     )
     return PunctuateResponse(
         text=result,

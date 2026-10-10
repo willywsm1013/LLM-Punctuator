@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("text", help="Text to punctuate")
     parser.add_argument("--language", default="zh", choices=["zh", "en"])
     parser.add_argument("--chunk-size", type=int, default=50)
+    parser.add_argument("--k", type=int, default=-1)
     parser.add_argument("--base-url", default="http://localhost:8000")
     args = parser.parse_args()
 
@@ -36,7 +37,12 @@ def main() -> None:
     # Punctuate
     resp = httpx.post(
         f"{base}/api/v1/punctuate",
-        json={"text": args.text, "language": args.language, "chunk_size": args.chunk_size},
+        json={
+            "text": args.text,
+            "language": args.language,
+            "chunk_size": args.chunk_size,
+            "k": args.k,
+        },
         timeout=120,
     )
 
