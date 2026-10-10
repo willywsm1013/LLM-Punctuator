@@ -85,7 +85,7 @@ class TestPunctuate:
         assert data["text"] == expected_text
         assert data["language"] == language
         mock_punctuator.add_punctuation.assert_called_once_with(
-            text, language=language, chunk_size=chunk_size, punctuations=None, k=-1
+            text, language=language, chunk_size=chunk_size, punctuations=None
         )
 
     def test_uses_settings_defaults_when_not_specified(
@@ -93,7 +93,7 @@ class TestPunctuate:
         client: TestClient,
         mock_punctuator: MagicMock,
     ) -> None:
-        """Omitted language and chunk_size fall back to the settings defaults, and k to -1."""
+        """Omitted language and chunk_size fall back to the settings defaults; k is not passed."""
         mock_punctuator.add_punctuation.return_value = "你好，世界。"
 
         response = client.post("/api/v1/punctuate", json={"text": "你好世界"})
@@ -102,7 +102,7 @@ class TestPunctuate:
         data = response.json()
         assert data["language"] == "zh"
         mock_punctuator.add_punctuation.assert_called_once_with(
-            "你好世界", language="zh", chunk_size=200, punctuations=None, k=-1
+            "你好世界", language="zh", chunk_size=200, punctuations=None
         )
 
     def test_passes_custom_punctuations(
@@ -120,7 +120,7 @@ class TestPunctuate:
 
         assert response.status_code == 200
         mock_punctuator.add_punctuation.assert_called_once_with(
-            "你好世界", language="zh", chunk_size=200, punctuations="，。", k=-1
+            "你好世界", language="zh", chunk_size=200, punctuations="，。"
         )
 
     def test_passes_k(
