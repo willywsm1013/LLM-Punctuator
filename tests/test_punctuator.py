@@ -46,16 +46,18 @@ class CharTokenizer:
 
 
 class ConstantScoreModel:
-    """Fake LM that gives every position the same scores."""
+    """Fake LM that gives every position the same scores, and counts its forwards."""
 
     device = torch.device("cpu")
 
     def __init__(self, scores: torch.Tensor) -> None:
         """Keep the scores of one position, shaped (1, vocab_size)."""
         self.scores = scores
+        self.forwards = 0
 
     def __call__(self, input_ids: torch.Tensor, **kwargs: object) -> SimpleNamespace:
         """Return the scores at every fed position."""
+        self.forwards += 1
         return SimpleNamespace(logits=self.scores.expand(1, input_ids.shape[1], -1))
 
 
@@ -234,6 +236,20 @@ def test_greedy_search_matches_step_by_step_greedy(
     result = punctuator.greedy_search(prompt, new_rule(), k)
 
     assert result == step_by_step_greedy(prompt, new_rule())
+
+
+@pytest.mark.parametrize(("k", "forwards"), [(-1, 1), (1, 5), (2, 3)], ids=["k_all", "k_1", "k_2"])
+def test_k_caps_mark_positions_decided_per_forward(
+    punctuator: TransformersLLMPunctuator, k: int, forwards: int
+) -> None:
+    """With no mark ever winning, 5 mark positions take ceil(5 / k) forwards, or 1 for k=-1."""
+    text_scores = torch.ones(1, 0x10000)
+    text_scores[0, [ord(p) for p in ZH_PUNCTUATIONS]] = 0.0
+    punctuator.model = ConstantScoreModel(text_scores)
+
+    punctuator.add_punctuation("今天天氣好", language="zh", chunk_size=50, k=k)
+
+    assert punctuator.model.forwards == forwards
 
 
 @pytest.mark.parametrize("k", [0, -2], ids=["zero", "below_minus_one"])
