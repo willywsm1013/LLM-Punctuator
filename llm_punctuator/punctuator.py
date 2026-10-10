@@ -1,8 +1,9 @@
 """Transformers-based LLM punctuator implementations."""
 
+import itertools
 import logging
-import math
 import os
+import re
 
 import torch
 from tqdm import tqdm
@@ -18,6 +19,8 @@ from .schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 logger = logging.getLogger(__name__)
+
+ZH_UNIT = re.compile(r"\s*(?:[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]+|.)", re.DOTALL)
 
 
 class TransformersLLMPunctuator:
@@ -119,7 +122,8 @@ class TransformersLLMPunctuator:
             punctuations: String of allowed punctuation characters. If None, uses default for language.
             language: Language code ("zh" for Chinese, "en" for English). Default: "zh".
             system_prompt: Custom system prompt. If None, uses default for language.
-            chunk_size: Number of tokens per chunk for processing.
+            chunk_size: Number of tokens per chunk for processing. A chunk that would end inside
+                a segment runs on to the end of that segment.
 
         Returns:
             Text with punctuation added.
@@ -157,7 +161,7 @@ class TransformersLLMPunctuator:
             # If the prompt doesn't have the placeholder, just use it as is
             pass
 
-        text_tokens = self.encode_text(text)
+        segments = self.split_segments(text, language)
 
         # Encode punctuation tokens individually to ensure correct token IDs
         # Some tokenizers might merge consecutive punctuation or handle them differently
@@ -172,12 +176,13 @@ class TransformersLLMPunctuator:
         # Remove duplicates while preserving order
         punctuation_tokens = list(dict.fromkeys(punctuation_tokens))
 
-        chunk_nums = math.ceil(len(text_tokens) / chunk_size)
-        chunks = [text_tokens[i * chunk_size : (i + 1) * chunk_size] for i in range(chunk_nums)]
+        chunks = self.chunk_segments(segments, chunk_size)
+        chunk_nums = len(chunks)
         prev_decode_tokens = []
         prev_chunk = []
         result_tokens = []
-        for chunk_idx, chunk in enumerate(tqdm(chunks)):
+        for chunk_idx, chunk_segments in enumerate(tqdm(chunks)):
+            chunk = [token for segment in chunk_segments for token in segment]
             chunk_text = self.decode(prev_chunk + chunk)
             assistant_prefix = self.decode(prev_decode_tokens)
 
@@ -202,6 +207,7 @@ class TransformersLLMPunctuator:
                 chunk + [self.tokenizer.eos_token_id],
                 punctuation_tokens,
                 has_prev_input=has_prev_input,
+                unit_ends=set(itertools.accumulate(len(segment) for segment in chunk_segments)),
             )
 
             logits_processor_list = LogitsProcessorList([logits_processor])
@@ -226,6 +232,60 @@ class TransformersLLMPunctuator:
 
         result = self.decode(result_tokens)
         return result
+
+    def split_segments(self, text: str, language: str) -> list[list[int]]:
+        """Encode text and group its tokens into segments a mark may not go inside.
+
+        A mark may go only where a segment ends. For zh, a segment ends where a unit ends and
+        the next token does not start inside that unit. A unit is one Chinese character, one
+        run of letters or digits, or one other character, with the whitespace before it.
+        Full-width letters and digits count as letters and digits. A token that covers two
+        units, such as one token for two characters, stays in one segment. For other
+        languages, each token is a segment.
+
+        Args:
+            text: Text to split.
+            language: Language code of the text.
+
+        Returns:
+            Token IDs of each segment, in text order. Together they are the tokenizer's
+            encoding of the whole text.
+        """
+        if language != "zh":
+            return [[token] for token in self.encode_text(text)]
+
+        encoding = self.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+        tokens, offsets = encoding["input_ids"], encoding["offset_mapping"]
+        unit_ends = set(itertools.accumulate(len(unit) for unit in ZH_UNIT.findall(text)))
+        cuts = [
+            i + 1
+            for i in range(len(tokens) - 1)
+            if offsets[i][1] in unit_ends and offsets[i + 1][0] >= offsets[i][1]
+        ]
+        bounds = [0, *cuts, len(tokens)]
+        return [tokens[start:end] for start, end in itertools.pairwise(bounds)]
+
+    @staticmethod
+    def chunk_segments(segments: list[list[int]], chunk_size: int) -> list[list[list[int]]]:
+        """Group consecutive segments into chunks without splitting a segment.
+
+        Args:
+            segments: Token IDs of each segment, in text order.
+            chunk_size: Number of tokens per chunk. A chunk closes at the first segment end at
+                or past this size, so only the last chunk may be shorter.
+
+        Returns:
+            The segments of each chunk, in text order.
+        """
+        chunks = []
+        size = chunk_size
+        for segment in segments:
+            if size >= chunk_size:
+                chunks.append([])
+                size = 0
+            chunks[-1].append(segment)
+            size += len(segment)
+        return chunks
 
     def encode_text(self, text: str) -> list[int]:
         """Encode text to token IDs, removing special tokens.
