@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 ChunkJob = tuple[list[int], CustomLogitsProcessor]
 ChunkLoop = Generator[ChunkJob, list[int], str]
 
-ZH_UNIT = re.compile(r"\s*(?:[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]+|.)", re.DOTALL)
+ALNUM_RUN = r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]+"
+ZH_UNIT = re.compile(rf"\s*(?:{ALNUM_RUN}(?:[-.]{ALNUM_RUN})*|.)", re.DOTALL)
 
 
 class TransformersLLMPunctuator:
@@ -312,9 +313,10 @@ class TransformersLLMPunctuator:
         A mark may go only where a segment ends. For zh, a segment ends where a unit ends and
         the next token does not start inside that unit. A unit is one Chinese character, one
         run of letters or digits, or one other character, with the whitespace before it.
-        Full-width letters and digits count as letters and digits. A token that covers two
-        units, such as one token for two characters, stays in one segment. For other
-        languages, each token is a segment.
+        Full-width letters and digits count as letters and digits. A half-width "-" or "."
+        with a letter or digit on both sides joins the runs on its two sides into one run.
+        A token that covers two units, such as one token for two characters, stays in one
+        segment. For other languages, each token is a segment.
 
         Args:
             text: Text to split.
