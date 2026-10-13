@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 import torch
-from transformers import AutoTokenizer, DynamicCache
+from transformers import AutoTokenizer, DynamicCache, Qwen3Config, Qwen3ForCausalLM
 
 from llm_punctuator.logits_processor import CustomLogitsProcessor
 from llm_punctuator.punctuator import ChunkJob, TransformersLLMPunctuator
@@ -82,17 +82,19 @@ class PrefixScoreModel:
     ) -> SimpleNamespace:
         """Score text 11 and each mark p by (31 * sum of attended tokens + 7 * position + p) % 13.
 
-        Without a mask, each row attends to every token up to it. Without position IDs,
-        positions count from the start of the cache.
+        Like a transformers model given a 2D mask, a token attends to the cached tokens up to
+        it that the mask keeps. Without a mask it keeps all. Without position IDs, positions
+        count from the start of the cache.
         """
         fed = input_ids[:, None, :, None]
         sequence = past_key_values.update(fed, fed, layer_idx=0)[0][:, 0, :, 0]
         total, width = sequence.shape[1], input_ids.shape[1]
         if attention_mask is None:
-            attention_mask = torch.ones(total, total, dtype=torch.bool).tril()[None, None, -width:]
+            attention_mask = torch.ones_like(sequence)
         if position_ids is None:
             position_ids = torch.arange(total - width, total)[None]
-        attended_sums = (attention_mask[:, 0] * sequence[:, None, :]).sum(dim=-1)
+        causal = torch.ones(total, total, dtype=torch.long).tril()[-width:]
+        attended_sums = (attention_mask[:, None, :] * causal * sequence[:, None, :]).sum(dim=-1)
         marks = torch.tensor([ord(p) for p in ZH_PUNCTUATIONS])
         logits = torch.full((*input_ids.shape, self.vocab_size), 11.0)
         logits[:, :, marks] = ((31 * attended_sums + 7 * position_ids)[..., None] + marks) % 13.0
@@ -223,11 +225,16 @@ def test_en_marks_go_between_tokens_as_before(
     assert result == "the, punct,uator, works, in, ,2,0,1,7,"
 
 
-def step_by_step_greedy(prompt: list[int], rule: CustomLogitsProcessor) -> list[int]:
-    """Decode one token per forward with the rule as a logits processor, without EOS."""
-    model = PrefixScoreModel()
+def step_by_step_greedy(
+    prompt: list[int], rule: CustomLogitsProcessor, model: object | None = None
+) -> list[int]:
+    """Decode one token per forward with the rule as a logits processor, without EOS.
+
+    The model defaults to PrefixScoreModel. Each forward starts from an empty cache.
+    """
+    model = model or PrefixScoreModel()
     ids = torch.tensor([prompt])
-    while ids[0, -1].item() != EOS_ID:
+    while ids[0, -1].item() != rule.original_text_tokens[-1]:
         scores = model(ids, past_key_values=DynamicCache()).logits[:, -1]
         next_id = rule(ids, scores).argmax(dim=-1, keepdim=True)
         ids = torch.cat([ids, next_id], dim=1)
@@ -260,6 +267,47 @@ def test_greedy_search_matches_step_by_step_greedy(
     results = punctuator.greedy_search([new_job(*row) for row in rows], k)
 
     assert results == [step_by_step_greedy(*new_job(*row)) for row in rows]
+
+
+@pytest.mark.parametrize("k", [-1, 1], ids=["k_all", "k_1"])
+@pytest.mark.parametrize("attn_implementation", ["eager", "sdpa"])
+def test_greedy_search_masks_rows_under_each_attention_backend(
+    qwen_punctuator: TransformersLLMPunctuator, attn_implementation: str, k: int
+) -> None:
+    """With real transformers attention, rows decoded together match one token per forward."""
+    tokenizer = qwen_punctuator.tokenizer
+    torch.manual_seed(0)
+    config = Qwen3Config(
+        vocab_size=len(tokenizer),
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=16,
+    )
+    config._attn_implementation = attn_implementation
+    model = Qwen3ForCausalLM(config).eval()
+    punctuator = TransformersLLMPunctuator.__new__(TransformersLLMPunctuator)
+    punctuator.tokenizer, punctuator.model, punctuator.device = tokenizer, model, model.device
+    marks = [tokenizer.encode(p)[-1] for p in ZH_PUNCTUATIONS]
+    rows = [
+        ("系統提示", "今天天氣很好我們去公園散步"),
+        ("提示", "鄉東至水社大山西至"),
+        ("", "鼓勵長輩"),
+    ]
+    jobs = []
+    for prompt, text in rows:
+        tokens = tokenizer.encode(text)
+        unit_ends = set(range(1, len(tokens) + 1))
+        rule = CustomLogitsProcessor(tokens + [tokenizer.eos_token_id], marks, True, unit_ends)
+        jobs.append((tokenizer.encode(f"<|im_start|>{prompt}"), rule))
+
+    with torch.no_grad():
+        results = punctuator.greedy_search(jobs, k)
+        expected = [step_by_step_greedy(prompt, rule, model) for prompt, rule in jobs]
+
+    assert results == expected
 
 
 @pytest.mark.parametrize(("k", "forwards"), [(-1, 1), (1, 5), (2, 3)], ids=["k_all", "k_1", "k_2"])

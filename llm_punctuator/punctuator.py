@@ -426,6 +426,7 @@ class TransformersLLMPunctuator:
         Each forward feeds every unfinished row, see GreedyRow. Rows put marks in different
         places, so the shared cache is never cropped. Text a row fed after its mark stays in
         the cache, masked out of that row's attention, and each row keeps its own positions.
+        The mask is 2D, so transformers builds the causal mask each attention backend needs.
 
         Args:
             jobs: The prompt token IDs and the rule of each row.
@@ -436,12 +437,12 @@ class TransformersLLMPunctuator:
         """
         rows = [GreedyRow(prompt_ids, rule) for prompt_ids, rule in jobs]
         cache = DynamicCache()
-        seen = torch.zeros(len(rows), 0, dtype=torch.bool)
+        seen = torch.zeros(len(rows), 0, dtype=torch.long)
         positions = [0] * len(rows)
         while not all(row.done for row in rows):
             feeds = [[] if row.done else row.feed(k) for row in rows]
             width = max(map(len, feeds))
-            # Padding follows each row's feed: the causal mask hides it, and kept drops it from
+            # Padding follows each row's feed: causal attention hides it, and kept drops it from
             # seen. So its token ID does not matter.
             ids = torch.full((len(rows), width), self.tokenizer.eos_token_id)
             position_ids = torch.zeros(len(rows), width, dtype=torch.long)
@@ -449,22 +450,18 @@ class TransformersLLMPunctuator:
                 ids[b, : len(fed)] = torch.tensor(fed, dtype=torch.long)
                 position_ids[b, : len(fed)] = torch.arange(positions[b], positions[b] + len(fed))
             past = seen.shape[1]
-            causal = torch.ones(width, width, dtype=torch.bool).tril()
-            mask = torch.cat(
-                [seen[:, None, :].expand(-1, width, -1), causal.expand(len(rows), -1, -1)], dim=2
-            )
+            seen = torch.cat([seen, torch.ones(len(rows), width, dtype=torch.long)], dim=1)
             logits = self.model(
                 input_ids=ids.to(self.device),
-                attention_mask=mask[:, None].to(self.device),
+                attention_mask=seen.to(self.device),
                 position_ids=position_ids.to(self.device),
                 cache_position=torch.arange(past, past + width, device=self.device),
                 past_key_values=cache,
                 use_cache=True,
             ).logits
-            seen = torch.cat([seen, torch.ones(len(rows), width, dtype=torch.bool)], dim=1)
             for b, row in enumerate(rows):
                 kept = row.take(logits[b]) if feeds[b] else 0
-                seen[b, past + kept :] = False
+                seen[b, past + kept :] = 0
                 positions[b] += kept
         return [row.emitted[:-1] for row in rows]
 
