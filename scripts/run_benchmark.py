@@ -2,7 +2,7 @@
 
 Usage:
     python scripts/run_benchmark.py --output-dir <directory> [--model Qwen/Qwen3-1.7B]
-        [--batch-size 8]
+        [--batch-size N]
 
 Reads reference files from data/benchmark/{category}/, strips punctuation to create
 inputs, runs the model, and saves outputs to the specified directory mirroring
@@ -62,8 +62,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=8,
-        help="Most texts to punctuate together. Default: 8",
+        help="Most texts to punctuate together. Default: the default of add_punctuation",
     )
     return parser.parse_args()
 
@@ -81,7 +80,11 @@ def main() -> int:
         return 1
 
     output_dir: Path = args.output_dir
-    options = {} if args.k is None else {"k": args.k}
+    options = {
+        name: value
+        for name, value in (("k", args.k), ("batch_size", args.batch_size))
+        if value is not None
+    }
 
     print(f"Loading model: {args.model}")
     punctuator = TransformersLLMPunctuator(args.model)
@@ -114,7 +117,6 @@ def main() -> int:
         plain_texts,
         language=args.language,
         chunk_size=args.chunk_size,
-        batch_size=args.batch_size,
         **options,
     )
     for out_file, result in zip(out_files, results, strict=True):
