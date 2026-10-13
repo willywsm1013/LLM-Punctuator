@@ -12,6 +12,7 @@ class PunctuateRequest(BaseModel):
     language: str | None = Field(default=None, pattern="^(zh|en)$")
     chunk_size: int | None = Field(default=None, gt=0)
     punctuations: str | None = Field(default=None, min_length=1)
+    k: int | None = None
 
     @field_validator("punctuations")
     @classmethod
@@ -22,6 +23,14 @@ class PunctuateRequest(BaseModel):
         invalid = set(v) - ALLOWED_PUNCTUATIONS
         if invalid:
             raise ValueError(f"Invalid punctuation characters: {''.join(sorted(invalid))}")
+        return v
+
+    @field_validator("k")
+    @classmethod
+    def validate_k(cls, v: int | None) -> int | None:
+        """Validate that k is -1 or a positive integer."""
+        if v is not None and (v == 0 or v < -1):
+            raise ValueError(f"k must be -1 or a positive integer, got {v}")
         return v
 
 

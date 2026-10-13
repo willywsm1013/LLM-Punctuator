@@ -83,9 +83,7 @@ class CustomLogitsProcessor(LogitsProcessor):
                 count += 1
         return count
 
-    def _get_allowed_tokens(
-        self, num_text_tokens_generated: int, last_token_id: int | None
-    ) -> set[int]:
+    def allowed_tokens(self, num_text_tokens_generated: int, last_token_id: int | None) -> set[int]:
         """Determine which tokens are allowed based on current generation state.
 
         Args:
@@ -138,7 +136,7 @@ class CustomLogitsProcessor(LogitsProcessor):
         last_token_id = generated_ids[-1].item() if len(generated_ids) > 0 else None
 
         # Determine allowed tokens
-        allowed_tokens = self._get_allowed_tokens(num_text_tokens_generated, last_token_id)
+        allowed_tokens = self.allowed_tokens(num_text_tokens_generated, last_token_id)
 
         # Create mask: -inf for disallowed tokens, keep original scores for allowed tokens
         mask = torch.full_like(scores, float("-inf"))

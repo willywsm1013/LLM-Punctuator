@@ -52,6 +52,12 @@ def get_args() -> argparse.Namespace:
         default=50,
         help="Chunk size for processing. Default: 50",
     )
+    parser.add_argument(
+        "--k",
+        type=int,
+        help="Most mark positions to decide per forward pass; -1 for the whole chunk. "
+        "Default: the default of add_punctuation",
+    )
     return parser.parse_args()
 
 
@@ -68,6 +74,7 @@ def main() -> int:
         return 1
 
     output_dir: Path = args.output_dir
+    options = {} if args.k is None else {"k": args.k}
 
     print(f"Loading model: {args.model}")
     punctuator = TransformersLLMPunctuator(args.model)
@@ -93,7 +100,7 @@ def main() -> int:
 
             print(f"  Processing: {ref_file.name} ({len(plain_text)} chars)")
             result = punctuator.add_punctuation(
-                plain_text, language=args.language, chunk_size=args.chunk_size
+                plain_text, language=args.language, chunk_size=args.chunk_size, **options
             )
 
             out_file.write_text(result, encoding="utf-8")

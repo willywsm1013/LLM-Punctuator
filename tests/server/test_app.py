@@ -93,7 +93,7 @@ class TestPunctuate:
         client: TestClient,
         mock_punctuator: MagicMock,
     ) -> None:
-        """Omitted language and chunk_size fall back to the settings defaults."""
+        """Omitted language and chunk_size fall back to the settings defaults; k is not passed."""
         mock_punctuator.add_punctuation.return_value = "你好，世界。"
 
         response = client.post("/api/v1/punctuate", json={"text": "你好世界"})
@@ -123,6 +123,19 @@ class TestPunctuate:
             "你好世界", language="zh", chunk_size=200, punctuations="，。"
         )
 
+    def test_passes_k(
+        self,
+        client: TestClient,
+        mock_punctuator: MagicMock,
+    ) -> None:
+        """A given k is passed through to add_punctuation."""
+        response = client.post("/api/v1/punctuate", json={"text": "你好世界", "k": 3})
+
+        assert response.status_code == 200
+        mock_punctuator.add_punctuation.assert_called_once_with(
+            "你好世界", language="zh", chunk_size=200, punctuations=None, k=3
+        )
+
     @pytest.mark.parametrize(
         "payload",
         [
@@ -130,11 +143,20 @@ class TestPunctuate:
             {"text": "hello", "language": "fr"},
             {"text": "hello", "punctuations": "abc"},
             {"text": "hello", "punctuations": ""},
+            {"text": "hello", "k": 0},
+            {"text": "hello", "k": -2},
         ],
-        ids=["empty_text", "unsupported_language", "invalid_punctuations", "empty_punctuations"],
+        ids=[
+            "empty_text",
+            "unsupported_language",
+            "invalid_punctuations",
+            "empty_punctuations",
+            "zero_k",
+            "k_below_minus_one",
+        ],
     )
     def test_rejects_invalid_input_with_422(self, client: TestClient, payload: dict) -> None:
-        """Invalid text, language or punctuations are rejected with 422."""
+        """Invalid text, language, punctuations or k are rejected with 422."""
         response = client.post("/api/v1/punctuate", json=payload)
 
         assert response.status_code == 422
