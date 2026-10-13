@@ -109,9 +109,9 @@ async def punctuate(request: Request, body: PunctuateRequest) -> PunctuateRespon
     language = body.language or settings.default_language
     chunk_size = body.chunk_size or settings.default_chunk_size
     options = {} if body.k is None else {"k": body.k}
-    result = await asyncio.to_thread(
+    [result] = await asyncio.to_thread(
         punctuator.add_punctuation,
-        body.text,
+        [body.text],
         language=language,
         chunk_size=chunk_size,
         punctuations=body.punctuations,

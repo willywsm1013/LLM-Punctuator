@@ -90,8 +90,8 @@ if __name__ == "__main__":
 
     # Language and punctuations are now handled automatically by add_punctuation
     options = {} if args.k is None else {"k": args.k}
-    result = punctuator.add_punctuation(
-        clean_text, language=args.language, chunk_size=args.chunk_size, **options
+    [result] = punctuator.add_punctuation(
+        [clean_text], language=args.language, chunk_size=args.chunk_size, **options
     )
 
     if args.output_file is None:
