@@ -58,13 +58,13 @@ def get_args() -> argparse.Namespace:
         "-b",
         "--batch_size",
         type=int,
-        default=8,
-        help="Most texts to decode together; only used with --list. Default: 8",
+        help="Most texts to decode together; only used with --list. "
+        "Default: the default of add_punctuation",
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
-    if args.batch_size < 1:
+    if args.batch_size is not None and args.batch_size < 1:
         parser.error(f"--batch_size must be a positive integer, got {args.batch_size}")
     return args
 
@@ -84,7 +84,7 @@ def clean_zh_text(text: str) -> str:
     return re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", clean_text)
 
 
-def read_list(list_path: Path) -> list[tuple[object, Path]]:
+def read_list(list_path: Path) -> list[tuple[object, str]]:
     """Read a JSONL list of texts to punctuate.
 
     Args:
@@ -92,12 +92,12 @@ def read_list(list_path: Path) -> list[tuple[object, Path]]:
             blank lines are ignored.
 
     Returns:
-        (id, path) per line in file order, with each path resolved against the list file's
-        directory.
+        (id, text) per line in file order. A relative path is resolved against the list
+        file's directory.
 
     Raises:
         ValueError: If a line is not valid JSON, lacks id or path, repeats an earlier id, or
-            points to a missing file. The message names the line number.
+            points to a missing or non-UTF-8 file. The message names the line number.
     """
     entries = []
     seen_ids = set()
@@ -117,8 +117,12 @@ def read_list(list_path: Path) -> list[tuple[object, Path]]:
             path = list_path.parent / item["path"]
             if not path.is_file():
                 raise ValueError(f"{where}: file not found: {path}")
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError as e:
+                raise ValueError(f"{where}: not UTF-8: {path}: {e.reason}") from e
             seen_ids.add(item["id"])
-            entries.append((item["id"], path))
+            entries.append((item["id"], text))
     return entries
 
 
@@ -139,7 +143,7 @@ if __name__ == "__main__":
             print(f"Invalid list: {e}", file=sys.stderr)
             sys.exit(1)
         ids = [entry_id for entry_id, _ in entries]
-        texts = [path.read_text(encoding="utf-8") for _, path in entries]
+        texts = [text for _, text in entries]
     elif args.file:
         texts = [Path(args.file).read_text(encoding="utf-8")]
     else:
@@ -155,7 +159,7 @@ if __name__ == "__main__":
 
     # Language and punctuations are now handled automatically by add_punctuation
     options = {} if args.k is None else {"k": args.k}
-    if ids is not None:
+    if ids is not None and args.batch_size is not None:
         options["batch_size"] = args.batch_size
     results = punctuator.add_punctuation(
         clean_texts, language=args.language, chunk_size=args.chunk_size, **options
@@ -164,13 +168,13 @@ if __name__ == "__main__":
     if ids is None:
         [output] = results
     else:
-        output = "\n".join(
-            json.dumps({"id": entry_id, "text": result}, ensure_ascii=False)
+        output = "".join(
+            json.dumps({"id": entry_id, "text": result}, ensure_ascii=False) + "\n"
             for entry_id, result in zip(ids, results, strict=True)
         )
 
     if args.output_file is None:
-        print(output)
+        print(output, end="\n" if ids is None else "")
     else:
         output_file = Path(args.output_file)
         output_file.parent.mkdir(parents=True, exist_ok=True)

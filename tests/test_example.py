@@ -102,6 +102,7 @@ class TestListOption:
         (texts_dir / "a.txt").write_text("今天天氣\n很好", encoding="utf-8")
         (texts_dir / "b.txt").write_text("我們去公園", encoding="utf-8")
         (texts_dir / "c.txt").write_text("然後回家", encoding="utf-8")
+        (texts_dir / "big5.txt").write_bytes("今天".encode("big5"))
         return texts_dir
 
     def test_list_prints_one_jsonl_line_per_entry_in_list_order(
@@ -168,6 +169,30 @@ class TestListOption:
 
         assert FullStopPunctuator.last_kwargs["batch_size"] == 2
 
+    def test_list_without_batch_size_leaves_add_punctuation_default(
+        self, texts_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Without -b, add_punctuation keeps its own batch_size default."""
+        list_path = write_list(texts_dir / "list.jsonl", ['{"id": "a", "path": "a.txt"}'])
+
+        run_example(["--list", str(list_path)])
+
+        assert "batch_size" not in FullStopPunctuator.last_kwargs
+
+    def test_list_output_file_ends_every_record_with_newline(self, texts_dir: Path) -> None:
+        """-o gets the same bytes as stdout, so two output files concatenate into valid JSONL."""
+        list_path = write_list(
+            texts_dir / "list.jsonl",
+            ['{"id": "a", "path": "a.txt"}', '{"id": "b", "path": "b.txt"}'],
+        )
+        output_path = texts_dir / "out.jsonl"
+
+        run_example(["--list", str(list_path), "-o", str(output_path)])
+
+        assert output_path.read_text(encoding="utf-8") == (
+            '{"id": "a", "text": "今天天氣很好。"}\n{"id": "b", "text": "我們去公園。"}\n'
+        )
+
     @pytest.mark.parametrize(
         "bad_line, message",
         [
@@ -176,8 +201,16 @@ class TestListOption:
             ('{"id": "b"}', '"id" and "path"'),
             ('{"id": "a", "path": "b.txt"}', "duplicate id 'a'"),
             ('{"id": "b", "path": "missing.txt"}', "file not found"),
+            ('{"id": "b", "path": "big5.txt"}', "not UTF-8"),
         ],
-        ids=["invalid_json", "missing_id", "missing_path", "duplicate_id", "missing_file"],
+        ids=[
+            "invalid_json",
+            "missing_id",
+            "missing_path",
+            "duplicate_id",
+            "missing_file",
+            "non_utf8_file",
+        ],
     )
     def test_list_error_exits_1_with_line_number_before_loading_model(
         self, texts_dir: Path, capsys: pytest.CaptureFixture[str], bad_line: str, message: str
