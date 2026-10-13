@@ -13,7 +13,7 @@ from llm_punctuator.server.app import ModelStatus
 def mock_punctuator() -> MagicMock:
     """A mock punctuator that avoids loading a real model."""
     mock = MagicMock()
-    mock.add_punctuation.return_value = "你好，世界。"
+    mock.add_punctuation.return_value = ["你好，世界。"]
     return mock
 
 

@@ -73,7 +73,7 @@ class TestPunctuate:
         expected_text: str,
     ) -> None:
         """The request parameters reach add_punctuation and its result is returned."""
-        mock_punctuator.add_punctuation.return_value = expected_text
+        mock_punctuator.add_punctuation.return_value = [expected_text]
 
         response = client.post(
             "/api/v1/punctuate",
@@ -85,7 +85,7 @@ class TestPunctuate:
         assert data["text"] == expected_text
         assert data["language"] == language
         mock_punctuator.add_punctuation.assert_called_once_with(
-            text, language=language, chunk_size=chunk_size, punctuations=None
+            [text], language=language, chunk_size=chunk_size, punctuations=None
         )
 
     def test_uses_settings_defaults_when_not_specified(
@@ -94,7 +94,7 @@ class TestPunctuate:
         mock_punctuator: MagicMock,
     ) -> None:
         """Omitted language and chunk_size fall back to the settings defaults; k is not passed."""
-        mock_punctuator.add_punctuation.return_value = "你好，世界。"
+        mock_punctuator.add_punctuation.return_value = ["你好，世界。"]
 
         response = client.post("/api/v1/punctuate", json={"text": "你好世界"})
 
@@ -102,7 +102,7 @@ class TestPunctuate:
         data = response.json()
         assert data["language"] == "zh"
         mock_punctuator.add_punctuation.assert_called_once_with(
-            "你好世界", language="zh", chunk_size=200, punctuations=None
+            ["你好世界"], language="zh", chunk_size=200, punctuations=None
         )
 
     def test_passes_custom_punctuations(
@@ -111,7 +111,7 @@ class TestPunctuate:
         mock_punctuator: MagicMock,
     ) -> None:
         """Custom punctuations are passed through to add_punctuation."""
-        mock_punctuator.add_punctuation.return_value = "你好，世界。"
+        mock_punctuator.add_punctuation.return_value = ["你好，世界。"]
 
         response = client.post(
             "/api/v1/punctuate",
@@ -120,7 +120,7 @@ class TestPunctuate:
 
         assert response.status_code == 200
         mock_punctuator.add_punctuation.assert_called_once_with(
-            "你好世界", language="zh", chunk_size=200, punctuations="，。"
+            ["你好世界"], language="zh", chunk_size=200, punctuations="，。"
         )
 
     def test_passes_k(
@@ -133,7 +133,7 @@ class TestPunctuate:
 
         assert response.status_code == 200
         mock_punctuator.add_punctuation.assert_called_once_with(
-            "你好世界", language="zh", chunk_size=200, punctuations=None, k=3
+            ["你好世界"], language="zh", chunk_size=200, punctuations=None, k=3
         )
 
     @pytest.mark.parametrize(

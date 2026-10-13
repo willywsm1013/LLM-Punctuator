@@ -2,6 +2,7 @@
 
 Usage:
     python scripts/run_benchmark.py --output-dir <directory> [--model Qwen/Qwen3-1.7B]
+        [--batch-size 8]
 
 Reads reference files from data/benchmark/{category}/, strips punctuation to create
 inputs, runs the model, and saves outputs to the specified directory mirroring
@@ -58,6 +59,12 @@ def get_args() -> argparse.Namespace:
         help="Most mark positions to decide per forward pass; -1 for the whole chunk. "
         "Default: the default of add_punctuation",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="Most texts to punctuate together. Default: 8",
+    )
     return parser.parse_args()
 
 
@@ -79,6 +86,8 @@ def main() -> int:
     print(f"Loading model: {args.model}")
     punctuator = TransformersLLMPunctuator(args.model)
 
+    out_files = []
+    plain_texts = []
     for category_dir in categories:
         category = category_dir.name
         ref_files = sorted(category_dir.glob("*.txt"))
@@ -97,14 +106,20 @@ def main() -> int:
 
             ref_text = ref_file.read_text(encoding="utf-8")
             plain_text, _ = extract_punctuation_labels(ref_text)
+            print(f"  Queued: {ref_file.name} ({len(plain_text)} chars)")
+            out_files.append(out_file)
+            plain_texts.append(plain_text)
 
-            print(f"  Processing: {ref_file.name} ({len(plain_text)} chars)")
-            result = punctuator.add_punctuation(
-                plain_text, language=args.language, chunk_size=args.chunk_size, **options
-            )
-
-            out_file.write_text(result, encoding="utf-8")
-            print(f"    -> {out_file}")
+    results = punctuator.add_punctuation(
+        plain_texts,
+        language=args.language,
+        chunk_size=args.chunk_size,
+        batch_size=args.batch_size,
+        **options,
+    )
+    for out_file, result in zip(out_files, results, strict=True):
+        out_file.write_text(result, encoding="utf-8")
+        print(f"  -> {out_file}")
 
     print(f"\nDone. Outputs saved to: {output_dir}")
     print(

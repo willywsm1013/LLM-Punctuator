@@ -4,6 +4,7 @@ import itertools
 import logging
 import os
 import re
+from collections.abc import Generator
 
 import torch
 from tqdm import tqdm
@@ -19,6 +20,9 @@ from .schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 logger = logging.getLogger(__name__)
+
+ChunkJob = tuple[list[int], CustomLogitsProcessor]
+ChunkLoop = Generator[ChunkJob, list[int], str]
 
 ZH_UNIT = re.compile(r"\s*(?:[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]+|.)", re.DOTALL)
 
@@ -109,17 +113,18 @@ class TransformersLLMPunctuator:
     @torch.no_grad()
     def add_punctuation(
         self,
-        text: str,
+        texts: list[str],
         punctuations: str | None = None,
         language: str = "zh",
         system_prompt: str | None = None,
         chunk_size: int = 200,
         k: int = -1,
-    ) -> str:
-        """Add punctuation to text using the LLM.
+        batch_size: int = 8,
+    ) -> list[str]:
+        """Add punctuation to texts using the LLM, decoding several texts per forward pass.
 
         Args:
-            text: Input text without punctuation.
+            texts: Input texts without punctuation.
             punctuations: String of allowed punctuation characters. If None, uses default for language.
             language: Language code ("zh" for Chinese, "en" for English). Default: "zh".
             system_prompt: Custom system prompt. If None, uses default for language.
@@ -127,13 +132,20 @@ class TransformersLLMPunctuator:
                 a segment runs on to the end of that segment.
             k: Most positions where a mark may go to decide per forward pass. -1 decides the
                 whole rest of the chunk. Default: -1.
+            batch_size: Most texts to decode together. Default: 8.
 
         Returns:
-            Text with punctuation added.
+            Each text with punctuation added, in the order of texts.
 
         Raises:
-            ValueError: If the specified language is not supported, or k is 0 or below -1.
+            TypeError: If texts is a str.
+            ValueError: If the specified language is not supported, k is 0 or below -1, or
+                batch_size is below 1.
         """
+        if isinstance(texts, str):
+            raise TypeError("texts must be a list of str, got str. Wrap a single text as [text].")
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be a positive integer, got {batch_size}")
         if k == 0 or k < -1:
             raise ValueError(f"k must be -1 or a positive integer, got {k}")
 
@@ -167,8 +179,6 @@ class TransformersLLMPunctuator:
             # If the prompt doesn't have the placeholder, just use it as is
             pass
 
-        segments = self.split_segments(text, language)
-
         # Encode punctuation tokens individually to ensure correct token IDs
         # Some tokenizers might merge consecutive punctuation or handle them differently
         punctuation_tokens = []
@@ -182,12 +192,82 @@ class TransformersLLMPunctuator:
         # Remove duplicates while preserving order
         punctuation_tokens = list(dict.fromkeys(punctuation_tokens))
 
+        loops = [
+            self.punctuate_chunks(text, language, system_prompt, punctuation_tokens, chunk_size)
+            for text in texts
+        ]
+        return self.run_loops(loops, batch_size, k)
+
+    def run_loops(self, loops: list[ChunkLoop], batch_size: int, k: int) -> list[str]:
+        """Run chunk loops with up to batch_size of them decoded together.
+
+        Each round decodes the current chunk of every loop in flight. A loop's next chunk waits
+        for the round, since its prompt holds the output of the chunk before it. A loop that
+        finishes frees its place for the next waiting loop.
+
+        Args:
+            loops: Chunk loops from punctuate_chunks.
+            batch_size: Most loops in flight.
+            k: Most mark positions to decide per row per forward. -1 for all.
+
+        Returns:
+            The result of each loop, in the order of loops.
+        """
+        results = [""] * len(loops)
+        waiting = iter(enumerate(loops))
+        in_flight: dict[int, tuple[ChunkLoop, ChunkJob]] = {}
+        progress = tqdm(total=len(loops))
+
+        def advance(idx: int, loop: ChunkLoop, generated: list[int] | None) -> None:
+            try:
+                in_flight[idx] = (loop, next(loop) if generated is None else loop.send(generated))
+            except StopIteration as stop:
+                results[idx] = stop.value
+                in_flight.pop(idx, None)
+                progress.update()
+
+        while True:
+            while len(in_flight) < batch_size and (item := next(waiting, None)):
+                advance(*item, None)
+            if not in_flight:
+                progress.close()
+                return results
+            jobs = list(in_flight.items())
+            outputs = self.greedy_search([job for _, (_, job) in jobs], k)
+            for (idx, (loop, _)), generated in zip(jobs, outputs, strict=True):
+                advance(idx, loop, generated)
+
+    def punctuate_chunks(
+        self,
+        text: str,
+        language: str,
+        system_prompt: str,
+        punctuation_tokens: list[int],
+        chunk_size: int,
+    ) -> ChunkLoop:
+        """Walk one text chunk by chunk, handing each chunk out to be decoded.
+
+        Args:
+            text: Input text without punctuation.
+            language: Language code of the text.
+            system_prompt: System prompt with the punctuations filled in.
+            punctuation_tokens: Token IDs of the allowed marks.
+            chunk_size: Number of tokens per chunk.
+
+        Yields:
+            The prompt token IDs and the rule of each chunk, in text order. Send back the
+            tokens generated for it.
+
+        Returns:
+            Text with punctuation added.
+        """
+        segments = self.split_segments(text, language)
         chunks = self.chunk_segments(segments, chunk_size)
         chunk_nums = len(chunks)
         prev_decode_tokens = []
         prev_chunk = []
         result_tokens = []
-        for chunk_idx, chunk_segments in enumerate(tqdm(chunks)):
+        for chunk_idx, chunk_segments in enumerate(chunks):
             chunk = [token for segment in chunk_segments for token in segment]
             chunk_text = self.decode(prev_chunk + chunk)
             assistant_prefix = self.decode(prev_decode_tokens)
@@ -209,7 +289,7 @@ class TransformersLLMPunctuator:
                 unit_ends=set(itertools.accumulate(len(segment) for segment in chunk_segments)),
             )
 
-            generated_tokens = self.greedy_search(prompt_ids, rule, k)
+            generated_tokens = yield prompt_ids, rule
 
             # Remove trailing punctuation from non-final chunks to prevent consecutive
             # punctuation at chunk boundaries
@@ -340,55 +420,112 @@ class TransformersLLMPunctuator:
                 generated_tokens = generated_tokens[:-1]
             return generated_tokens
 
-    def greedy_search(
-        self, prompt_ids: list[int], rule: CustomLogitsProcessor, k: int
-    ) -> list[int]:
-        """Greedy decoding under the rule, deciding up to k mark positions per forward pass.
+    def greedy_search(self, jobs: list[ChunkJob], k: int) -> list[list[int]]:
+        """Greedy decoding of several rows together, deciding up to k mark positions per forward.
 
-        The text is known, so one forward over the tokens not yet cached plus the upcoming
-        text gives the scores at every upcoming position. Each position takes the highest
-        scoring allowed token, ties going to the lowest token ID as in step-by-step greedy
-        decoding. Where a mark wins, the text after it was fed in the wrong place: it is
-        cropped from the cache, and the next forward continues after the mark.
+        Each forward feeds every unfinished row, see GreedyRow. Rows put marks in different
+        places, so the shared cache is never cropped. Text a row fed after its mark stays in
+        the cache, masked out of that row's attention, and each row keeps its own positions.
+
+        Args:
+            jobs: The prompt token IDs and the rule of each row.
+            k: Most positions where a mark may go to decide per row per forward. -1 for all.
+
+        Returns:
+            Generated token IDs of each row, without the EOS token.
+        """
+        rows = [GreedyRow(prompt_ids, rule) for prompt_ids, rule in jobs]
+        cache = DynamicCache()
+        seen = torch.zeros(len(rows), 0, dtype=torch.bool)
+        positions = [0] * len(rows)
+        while not all(row.done for row in rows):
+            feeds = [[] if row.done else row.feed(k) for row in rows]
+            width = max(map(len, feeds))
+            # Padding follows each row's feed: the causal mask hides it, and kept drops it from
+            # seen. So its token ID does not matter.
+            ids = torch.full((len(rows), width), self.tokenizer.eos_token_id)
+            position_ids = torch.zeros(len(rows), width, dtype=torch.long)
+            for b, fed in enumerate(feeds):
+                ids[b, : len(fed)] = torch.tensor(fed, dtype=torch.long)
+                position_ids[b, : len(fed)] = torch.arange(positions[b], positions[b] + len(fed))
+            past = seen.shape[1]
+            causal = torch.ones(width, width, dtype=torch.bool).tril()
+            mask = torch.cat(
+                [seen[:, None, :].expand(-1, width, -1), causal.expand(len(rows), -1, -1)], dim=2
+            )
+            logits = self.model(
+                input_ids=ids.to(self.device),
+                attention_mask=mask[:, None].to(self.device),
+                position_ids=position_ids.to(self.device),
+                cache_position=torch.arange(past, past + width, device=self.device),
+                past_key_values=cache,
+                use_cache=True,
+            ).logits
+            seen = torch.cat([seen, torch.ones(len(rows), width, dtype=torch.bool)], dim=1)
+            for b, row in enumerate(rows):
+                kept = row.take(logits[b]) if feeds[b] else 0
+                seen[b, past + kept :] = False
+                positions[b] += kept
+        return [row.emitted[:-1] for row in rows]
+
+
+class GreedyRow:
+    """One row of greedy_search: a chunk decoded under its rule, a few positions per forward.
+
+    The text is known, so one forward over the tokens not yet fed plus the upcoming text gives
+    the scores at every upcoming position. Each position takes the highest scoring allowed
+    token, ties going to the lowest token ID as in step-by-step greedy decoding. Where a mark
+    wins, the text fed after it was in the wrong place, and the next forward continues after
+    the mark.
+    """
+
+    def __init__(self, prompt_ids: list[int], rule: CustomLogitsProcessor) -> None:
+        """Start the row before its prompt is fed.
 
         Args:
             prompt_ids: Token IDs of the prompt.
             rule: Which tokens each position allows.
-            k: Most positions where a mark may go to decide per forward. -1 for all.
+        """
+        self.rule = rule
+        self.targets = rule.original_text_tokens
+        self.emitted: list[int] = []
+        self.pending = prompt_ids
+        self.start = 0
+        self.end = 0
+        self.done = False
+
+    def feed(self, k: int) -> list[int]:
+        """Token IDs to feed next, deciding up to k mark positions. -1 for all."""
+        upcoming = sorted(p for p in self.rule.mark_positions if p >= self.start)
+        self.end = upcoming[k - 1] if 0 < k <= len(upcoming) else len(self.targets) - 1
+        return self.pending + self.targets[self.start : self.end]
+
+    def take(self, logits: torch.Tensor) -> int:
+        """Decide positions from the logits of the last feed.
+
+        Args:
+            logits: Scores at each fed position and any padding after it, shaped
+                (sequence length, vocab size).
 
         Returns:
-            Generated token IDs, without the EOS token.
+            How many fed tokens are still valid to attend to.
         """
-        targets = rule.original_text_tokens
-        text_len = len(targets) - 1
-        cache = DynamicCache()
-        emitted: list[int] = []
-        pending, start = prompt_ids, 0
-        while True:
-            upcoming = sorted(p for p in rule.mark_positions if p >= start)
-            end = upcoming[k - 1] if 0 < k <= len(upcoming) else text_len
-            fed = pending + targets[start:end]
-            cached = cache.get_seq_length()
-            logits = self.model(
-                input_ids=torch.tensor([fed], device=self.device),
-                past_key_values=cache,
-                use_cache=True,
-            ).logits[0, len(pending) - 1 :]
-            candidates = sorted(set(targets[start : end + 1]) | rule.punctuation_tokens)
-            rows = logits[:, candidates].float().tolist()
-            for pos in range(start, end + 1):
-                score = dict(zip(candidates, rows[pos - start], strict=True))
-                allowed = sorted(rule.allowed_tokens(pos, emitted[-1] if emitted else None))
-                choice = max(allowed, key=score.__getitem__)
-                emitted.append(choice)
-                due = targets[pos]
-                if choice != due:
-                    cache.crop(cached + len(pending) + pos - start)
-                    emitted.append(due)
-                    pending = [choice, due]
-                    break
-            else:
-                pending = [due]
-            if emitted[-1] == targets[-1]:
-                return emitted[:-1]
-            start = pos + 1
+        start, pending = self.start, self.pending
+        candidates = sorted(set(self.targets[start : self.end + 1]) | self.rule.punctuation_tokens)
+        fed_len = len(pending) + self.end - start
+        rows = logits[len(pending) - 1 : fed_len, candidates].float().tolist()
+        for pos in range(start, self.end + 1):
+            score = dict(zip(candidates, rows[pos - start], strict=True))
+            allowed = self.rule.allowed_tokens(pos, self.emitted[-1] if self.emitted else None)
+            choice = max(sorted(allowed), key=score.__getitem__)
+            self.emitted.append(choice)
+            due = self.targets[pos]
+            if choice != due:
+                self.emitted.append(due)
+                self.pending = [choice, due]
+                break
+        else:
+            self.pending = [due]
+        self.done = self.emitted[-1] == self.targets[-1]
+        self.start = pos + 1
+        return len(pending) + pos - start

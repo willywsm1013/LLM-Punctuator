@@ -1,5 +1,6 @@
 """Tests for TransformersLLMPunctuator: decoding and where marks may go."""
 
+import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,10 +9,10 @@ import torch
 from transformers import AutoTokenizer, DynamicCache
 
 from llm_punctuator.logits_processor import CustomLogitsProcessor
-from llm_punctuator.punctuator import TransformersLLMPunctuator
+from llm_punctuator.punctuator import ChunkJob, TransformersLLMPunctuator
 from llm_punctuator.schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
 
-EOS_ID = 0
+EOS_ID = 3
 QWEN_MODEL = "Qwen/Qwen3-1.7B"
 K_VALUES = pytest.mark.parametrize("k", [-1, 1], ids=["k_all", "k_1"])
 
@@ -58,29 +59,43 @@ class ConstantScoreModel:
     def __call__(self, input_ids: torch.Tensor, **kwargs: object) -> SimpleNamespace:
         """Return the scores at every fed position."""
         self.forwards += 1
-        return SimpleNamespace(logits=self.scores.expand(1, input_ids.shape[1], -1))
+        return SimpleNamespace(logits=self.scores.expand(*input_ids.shape, -1))
 
 
 class PrefixScoreModel:
-    """Fake LM whose scores at a position depend on every token before it.
+    """Fake LM whose scores at a position depend on that position and every token it attends to.
 
-    It keeps the token IDs in the cache, so a cropped cache changes what it sees.
+    It keeps the token IDs in the cache, so a cropped cache or a masked token changes what it
+    sees.
     """
 
     device = torch.device("cpu")
     vocab_size = 0x10000
 
     def __call__(
-        self, input_ids: torch.Tensor, past_key_values: DynamicCache, **kwargs: object
+        self,
+        input_ids: torch.Tensor,
+        past_key_values: DynamicCache,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        **kwargs: object,
     ) -> SimpleNamespace:
-        """Score text 11 and each mark p by (31 * sum of the prefix + p) % 13."""
+        """Score text 11 and each mark p by (31 * sum of attended tokens + 7 * position + p) % 13.
+
+        Without a mask, each row attends to every token up to it. Without position IDs,
+        positions count from the start of the cache.
+        """
         fed = input_ids[:, None, :, None]
-        sequence = past_key_values.update(fed, fed, layer_idx=0)[0][0, 0, :, 0].tolist()
-        logits = torch.full((1, input_ids.shape[1], self.vocab_size), 11.0)
+        sequence = past_key_values.update(fed, fed, layer_idx=0)[0][:, 0, :, 0]
+        total, width = sequence.shape[1], input_ids.shape[1]
+        if attention_mask is None:
+            attention_mask = torch.ones(total, total, dtype=torch.bool).tril()[None, None, -width:]
+        if position_ids is None:
+            position_ids = torch.arange(total - width, total)[None]
+        attended_sums = (attention_mask[:, 0] * sequence[:, None, :]).sum(dim=-1)
         marks = torch.tensor([ord(p) for p in ZH_PUNCTUATIONS])
-        for row in range(input_ids.shape[1]):
-            prefix_sum = sum(sequence[: len(sequence) - input_ids.shape[1] + row + 1])
-            logits[0, row, marks] = ((31 * prefix_sum + marks) % 13).float()
+        logits = torch.full((*input_ids.shape, self.vocab_size), 11.0)
+        logits[:, :, marks] = ((31 * attended_sums + 7 * position_ids)[..., None] + marks) % 13.0
         return SimpleNamespace(logits=logits)
 
 
@@ -122,7 +137,7 @@ def test_add_punctuation_keeps_all_text_when_every_position_is_punctuated(
     """No text is dropped even when every allowed position gets a mark."""
     text = "今天天氣很好我們去公園散步"
 
-    result = punctuator.add_punctuation(text, language="zh", chunk_size=chunk_size, k=k)
+    [result] = punctuator.add_punctuation([text], language="zh", chunk_size=chunk_size, k=k)
 
     assert "".join(c for c in result if c not in ZH_PUNCTUATIONS) == text
 
@@ -147,7 +162,9 @@ def test_add_punctuation_keeps_trailing_mark_when_every_gap_is_punctuated(
     k: int,
 ) -> None:
     """The trailing mark survives even when every gap in the last chunk gets a mark."""
-    result = qwen_punctuator.add_punctuation(text, language=language, chunk_size=chunk_size, k=k)
+    [result] = qwen_punctuator.add_punctuation(
+        [text], language=language, chunk_size=chunk_size, k=k
+    )
 
     assert result == expected
 
@@ -186,7 +203,7 @@ def test_zh_marks_never_split_a_unit(
     k: int,
 ) -> None:
     """A mark goes after every token that ends a unit, and never inside a unit."""
-    result = qwen_punctuator.add_punctuation(text, language="zh", chunk_size=chunk_size, k=k)
+    [result] = qwen_punctuator.add_punctuation([text], language="zh", chunk_size=chunk_size, k=k)
 
     assert result == expected
 
@@ -199,8 +216,8 @@ def test_en_marks_go_between_tokens_as_before(
     k: int,
 ) -> None:
     """English keeps one mark position per token, even inside a word or number."""
-    result = qwen_punctuator.add_punctuation(
-        "the punctuator works in 2017", language="en", chunk_size=chunk_size, k=k
+    [result] = qwen_punctuator.add_punctuation(
+        ["the punctuator works in 2017"], language="en", chunk_size=chunk_size, k=k
     )
 
     assert result == "the, punct,uator, works, in, ,2,0,1,7,"
@@ -218,24 +235,31 @@ def step_by_step_greedy(prompt: list[int], rule: CustomLogitsProcessor) -> list[
 
 
 @pytest.mark.parametrize("k", [-1, 1, 2], ids=["k_all", "k_1", "k_2"])
-@pytest.mark.parametrize("has_prev_input", [False, True], ids=["first_chunk", "continued_chunk"])
 def test_greedy_search_matches_step_by_step_greedy(
-    punctuator: TransformersLLMPunctuator, k: int, has_prev_input: bool
+    punctuator: TransformersLLMPunctuator, k: int
 ) -> None:
-    """Deciding several positions per forward gives the same tokens as one per forward."""
+    """Rows decoded together each get the tokens that one token per forward gives them alone."""
     punctuator.model = PrefixScoreModel()
     text = punctuator.encode_text("今天在2017年天氣很好我們去公園")
-    prompt = punctuator.encode_text("[user]")
-    unit_ends = {i for i in range(1, len(text) + 1) if i not in {4, 5, 6}}
+    short_text = punctuator.encode_text("去公園散步")
+    text_unit_ends = {i for i in range(1, len(text) + 1) if i not in {4, 5, 6}}
+    rows = [
+        ("[user]", text, False, text_unit_ends),
+        ("[system]說明[user]", text, True, text_unit_ends),
+        ("[user]", short_text, True, set(range(1, len(short_text) + 1))),
+    ]
 
-    def new_rule() -> CustomLogitsProcessor:
-        return CustomLogitsProcessor(
-            text + [EOS_ID], [ord(p) for p in ZH_PUNCTUATIONS], has_prev_input, unit_ends
+    def new_job(
+        prompt: str, tokens: list[int], has_prev_input: bool, unit_ends: set[int]
+    ) -> ChunkJob:
+        rule = CustomLogitsProcessor(
+            tokens + [EOS_ID], [ord(p) for p in ZH_PUNCTUATIONS], has_prev_input, unit_ends
         )
+        return punctuator.encode_text(prompt), rule
 
-    result = punctuator.greedy_search(prompt, new_rule(), k)
+    results = punctuator.greedy_search([new_job(*row) for row in rows], k)
 
-    assert result == step_by_step_greedy(prompt, new_rule())
+    assert results == [step_by_step_greedy(*new_job(*row)) for row in rows]
 
 
 @pytest.mark.parametrize(("k", "forwards"), [(-1, 1), (1, 5), (2, 3)], ids=["k_all", "k_1", "k_2"])
@@ -247,7 +271,7 @@ def test_k_caps_mark_positions_decided_per_forward(
     text_scores[0, [ord(p) for p in ZH_PUNCTUATIONS]] = 0.0
     punctuator.model = ConstantScoreModel(text_scores)
 
-    punctuator.add_punctuation("今天天氣好", language="zh", chunk_size=50, k=k)
+    punctuator.add_punctuation(["今天天氣好"], language="zh", chunk_size=50, k=k)
 
     assert punctuator.model.forwards == forwards
 
@@ -256,4 +280,60 @@ def test_k_caps_mark_positions_decided_per_forward(
 def test_add_punctuation_rejects_invalid_k(punctuator: TransformersLLMPunctuator, k: int) -> None:
     """Any k other than -1 or a positive integer raises ValueError."""
     with pytest.raises(ValueError, match=f"k must be -1 or a positive integer, got {k}"):
-        punctuator.add_punctuation("今天天氣很好", k=k)
+        punctuator.add_punctuation(["今天天氣很好"], k=k)
+
+
+ZH_INPUTS = [
+    "鄉東至水社大山西至",
+    "中共2017年",
+    "鼓勵長輩",
+    "他說hello world今天",
+    "買iPhone15花２０１７％",
+    "鄉東至水社大",
+]
+EN_INPUTS = ["hello world how are you", "the punctuator works in 2017"]
+
+
+@K_VALUES
+@pytest.mark.parametrize(
+    ("texts", "language", "chunk_size"),
+    [
+        *[(ZH_INPUTS, "zh", chunk_size) for chunk_size in (50, 2, 3, 4)],
+        *[(EN_INPUTS, "en", chunk_size) for chunk_size in (50, 2, 3)],
+    ],
+    ids=["zh_50", "zh_2", "zh_3", "zh_4", "en_50", "en_2", "en_3"],
+)
+def test_batch_gives_each_text_its_own_output(
+    qwen_punctuator: TransformersLLMPunctuator,
+    texts: list[str],
+    language: str,
+    chunk_size: int,
+    k: int,
+) -> None:
+    """Texts punctuated together get what each gets alone, in input order."""
+    options = {"language": language, "chunk_size": chunk_size, "k": k}
+    alone = [qwen_punctuator.add_punctuation([text], batch_size=1, **options)[0] for text in texts]
+
+    together = qwen_punctuator.add_punctuation(texts, batch_size=8, **options)
+
+    assert together == alone
+
+
+def test_add_punctuation_rejects_a_single_str(punctuator: TransformersLLMPunctuator) -> None:
+    """A bare str raises TypeError that says to wrap it in a list."""
+    with pytest.raises(
+        TypeError,
+        match=re.escape("texts must be a list of str, got str. Wrap a single text as [text]."),
+    ):
+        punctuator.add_punctuation("今天天氣很好")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("batch_size", [0, -1], ids=["zero", "negative"])
+def test_add_punctuation_rejects_batch_size_below_one(
+    punctuator: TransformersLLMPunctuator, batch_size: int
+) -> None:
+    """batch_size below 1 raises ValueError."""
+    with pytest.raises(
+        ValueError, match=f"batch_size must be a positive integer, got {batch_size}"
+    ):
+        punctuator.add_punctuation(["今天天氣很好"], batch_size=batch_size)
