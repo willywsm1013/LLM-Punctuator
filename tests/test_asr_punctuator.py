@@ -1,11 +1,24 @@
 """Tests for ASRPunctuator: audio input, prompt, and forced decoding."""
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
+import pytest
 import soundfile
+import torch
+from transformers import AutoTokenizer, DynamicCache, Qwen3Config, Qwen3ForCausalLM
 
-from llm_punctuator.asr_punctuator import SAMPLE_RATE, load_audio
+from llm_punctuator.asr_punctuator import SAMPLE_RATE, ASRPunctuator, build_prompt, load_audio
+from llm_punctuator.schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
+from tests.test_punctuator import ZH_UNIT_CASES
+
+ASR_MODEL = "Qwen/Qwen3-ASR-1.7B"
+AUDIO_TOKEN_ID = 151676
+HIDDEN = 8
+N_AUDIO = 3
+K_VALUES = pytest.mark.parametrize("k", [-1, 1], ids=["k_all", "k_1"])
 
 
 def tone(seconds: float, sample_rate: int, peak: float = 0.5) -> np.ndarray:
@@ -42,3 +55,151 @@ def test_peak_above_one_is_scaled_to_one() -> None:
     signal = tone(1.0, SAMPLE_RATE, peak=0.5)
 
     np.testing.assert_allclose(load_audio((signal * 4, SAMPLE_RATE)), signal * 2, atol=1e-7)
+
+
+class FakeAudioEncoder:
+    """Turns any features into N_AUDIO zero vectors, and counts its calls."""
+
+    def __init__(self) -> None:
+        """Start with no calls."""
+        self.calls = 0
+
+    def __call__(self, input_features: torch.Tensor, feature_lens: torch.Tensor) -> SimpleNamespace:
+        """Return N_AUDIO vectors of size HIDDEN."""
+        self.calls += 1
+        return SimpleNamespace(last_hidden_state=torch.zeros(N_AUDIO, HIDDEN))
+
+
+class ConstantScoreLM:
+    """Fake LM fed by embeddings that gives every position the same scores."""
+
+    device = torch.device("cpu")
+    dtype = torch.float32
+
+    def __init__(self, scores: torch.Tensor) -> None:
+        """Keep the scores of one position, shaped (1, vocab_size)."""
+        self.scores = scores
+        self.embedding = torch.nn.Embedding(scores.shape[1], HIDDEN)
+
+    def get_input_embeddings(self) -> torch.nn.Embedding:
+        """Return the token embedding."""
+        return self.embedding
+
+    def __call__(self, inputs_embeds: torch.Tensor, **kwargs: object) -> SimpleNamespace:
+        """Return the scores at every fed position."""
+        return SimpleNamespace(logits=self.scores.expand(*inputs_embeds.shape[:2], -1))
+
+
+@pytest.fixture(scope="module")
+def asr_punctuator() -> ASRPunctuator:
+    """Real Qwen3-ASR tokenizer with a fake model that picks the first mark whenever one is allowed."""
+    tokenizer = AutoTokenizer.from_pretrained(ASR_MODEL)
+    scores = torch.ones(1, len(tokenizer))
+    scores[0, tokenizer.eos_token_id] = 0.0
+    for punctuations in (ZH_PUNCTUATIONS, EN_PUNCTUATIONS):
+        scores[0, tokenizer.encode(punctuations[0])[-1]] = 2.0
+    with patch("llm_punctuator.asr_punctuator.load_model") as load_model:
+        load_model.return_value = (FakeAudioEncoder(), ConstantScoreLM(scores), AUDIO_TOKEN_ID)
+        return ASRPunctuator(ASR_MODEL)
+
+
+@pytest.fixture
+def wav_path(tmp_path: Path) -> Path:
+    """One second of tone at 16 kHz."""
+    path = tmp_path / "tone.wav"
+    soundfile.write(path, tone(1.0, SAMPLE_RATE), SAMPLE_RATE, subtype="FLOAT")
+    return path
+
+
+@K_VALUES
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [pytest.param(*case.values[::2], id=case.id) for case in ZH_UNIT_CASES if case.values[1] == 50],
+)
+def test_zh_marks_never_split_a_unit(
+    asr_punctuator: ASRPunctuator, wav_path: Path, text: str, expected: str, k: int
+) -> None:
+    """The #24 zh cases without a chunk cut hold for the ASR punctuator."""
+    [result] = asr_punctuator.add_punctuation([text], [str(wav_path)], language="zh", k=k)
+
+    assert result == expected
+
+
+def test_each_text_gets_its_own_result_in_input_order(
+    asr_punctuator: ASRPunctuator, wav_path: Path
+) -> None:
+    """Two texts come back in the order given."""
+    results = asr_punctuator.add_punctuation(["鼓勵長輩", "中共2017年"], [str(wav_path)] * 2)
+
+    assert results == ["鼓，勵，長，輩，", "中共，2017，年，"]
+
+
+def test_build_prompt_fills_context_and_keeps_other_braces() -> None:
+    """Only {text} is replaced, the pads match n_audio, and the tag becomes the model's name."""
+    prompt = build_prompt("主題：{text}{x}", "今天", 2, "yue")
+
+    assert prompt == (
+        "<|im_start|>system\n主題：今天{x}<|im_end|>\n"
+        "<|im_start|>user\n<|audio_start|><|audio_pad|><|audio_pad|><|audio_end|><|im_end|>\n"
+        "<|im_start|>assistant\nlanguage Cantonese<asr_text>"
+    )
+
+
+@pytest.fixture
+def tiny_asr_punctuator(asr_punctuator: ASRPunctuator) -> ASRPunctuator:
+    """A randomly initialized real Qwen3ForCausalLM behind the ASR forward."""
+    torch.manual_seed(0)
+    config = Qwen3Config(
+        vocab_size=len(asr_punctuator.tokenizer),
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=16,
+    )
+    punctuator = ASRPunctuator.__new__(ASRPunctuator)
+    punctuator.model = Qwen3ForCausalLM(config).eval()
+    punctuator.device, punctuator.audio_token_id = punctuator.model.device, AUDIO_TOKEN_ID
+    return punctuator
+
+
+def forward_all(punctuator: ASRPunctuator, ids: list[int]) -> torch.Tensor:
+    """Run the ASR forward on ids as one row with a fresh cache."""
+    input_ids = torch.tensor([ids])
+    positions = torch.arange(len(ids))
+    return punctuator.forward(
+        input_ids=input_ids,
+        attention_mask=torch.ones_like(input_ids),
+        position_ids=positions[None],
+        cache_position=positions,
+        past_key_values=DynamicCache(),
+    )
+
+
+def test_forward_feeds_audio_vectors_at_audio_pads(tiny_asr_punctuator: ASRPunctuator) -> None:
+    """The logits equal the real model fed the audio vectors in place of the pads."""
+    audio = torch.randn(2, 32)
+    tiny_asr_punctuator.pending_audio = audio
+    embed = tiny_asr_punctuator.model.get_input_embeddings()
+    before, after = torch.tensor([151644]), torch.tensor([151670, 151645])
+
+    with torch.no_grad():
+        logits = forward_all(
+            tiny_asr_punctuator, [151644, AUDIO_TOKEN_ID, AUDIO_TOKEN_ID, 151670, 151645]
+        )
+        expected = tiny_asr_punctuator.model(
+            inputs_embeds=torch.cat([embed(before), audio, embed(after)])[None]
+        ).logits
+
+    torch.testing.assert_close(logits, expected)
+
+
+def test_forward_rejects_pad_count_that_differs_from_audio_vectors(
+    tiny_asr_punctuator: ASRPunctuator,
+) -> None:
+    """Two pads with three vectors raises ValueError."""
+    tiny_asr_punctuator.pending_audio = torch.randn(3, 32)
+
+    with pytest.raises(ValueError, match="2 audio pads but 3 audio vectors"):
+        forward_all(tiny_asr_punctuator, [151644, AUDIO_TOKEN_ID, AUDIO_TOKEN_ID, 151645])
