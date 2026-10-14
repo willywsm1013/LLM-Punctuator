@@ -1,6 +1,6 @@
 # ASR punctuator design (#26)
 
-Status: 第 1、2、3 段已核可，待整份 review。
+Status: 已核可，2026-10-14。
 
 需求以 #26 為準。本檔只寫票上沒定的設計決定。
 
