@@ -16,6 +16,46 @@ EOS_ID = 3
 QWEN_MODEL = "Qwen/Qwen3-1.7B"
 K_VALUES = pytest.mark.parametrize("k", [-1, 1], ids=["k_all", "k_1"])
 
+ZH_UNIT_CASES = [
+    pytest.param(
+        "鄉東至水社大山西至",
+        50,
+        "鄉，東，至，水，社，大，山西，至，",
+        id="merged_characters_stay_together",
+    ),
+    pytest.param("中共2017年", 50, "中共，2017，年，", id="digit_run"),
+    pytest.param("鼓勵長輩", 50, "鼓，勵，長，輩，", id="rare_character"),
+    pytest.param(
+        "他說hello world今天", 50, "他，說，hello， world，今天，", id="english_words_with_space"
+    ),
+    pytest.param(
+        "買iPhone15花２０１７％",
+        50,
+        "買，iPhone15，花，２０１７，％，",
+        id="full_width_run_and_symbol",
+    ),
+    pytest.param(
+        "口負成長新生兒", 50, "口，負，成，長新，生，兒，", id="token_straddles_two_characters"
+    ),
+    pytest.param("鼓勵長輩", 2, "鼓，勵，長，輩，", id="chunk_cut_inside_rare_character"),
+    pytest.param("中共2017年", 3, "中共，2017，年，", id="chunk_cut_inside_digit_run"),
+    pytest.param(
+        "口負成長新生兒", 4, "口，負，成，長新，生，兒，", id="chunk_cut_before_straddling_token"
+    ),
+    pytest.param("買AK-47和F-16", 50, "買，AK-47，和，F-16，", id="dash_joins_letters_and_digits"),
+    pytest.param("COVID-19疫情", 50, "COVID-19，疫情，", id="dash_joins_word_and_number"),
+    pytest.param("圓周率3.14", 50, "圓，周，率，3.14，", id="dot_joins_digits"),
+    pytest.param("2024-10-10", 50, "2024-10-10，", id="dashes_join_date"),
+    pytest.param("self-driving車", 50, "self-driving，車，", id="dash_joins_words"),
+    pytest.param("v1.2.3版", 50, "v1.2.3，版，", id="dots_join_version"),
+    pytest.param("U.S.政府", 50, "U.S，.，政府，", id="dot_before_chinese_stands_alone"),
+    pytest.param("3-月", 50, "3，-，月，", id="dash_before_chinese_stands_alone"),
+    pytest.param("ＡＫ－４７", 50, "ＡＫ，－，４７，", id="full_width_dash_stands_alone"),
+    pytest.param(
+        "買AK-47和F-16", 2, "買，AK-47，和，F-16，", id="chunk_cut_inside_dash_joined_run"
+    ),
+]
+
 
 class CharTokenizer:
     """One token per character, token id = code point."""
@@ -172,51 +212,7 @@ def test_add_punctuation_keeps_trailing_mark_when_every_gap_is_punctuated(
 
 
 @K_VALUES
-@pytest.mark.parametrize(
-    ("text", "chunk_size", "expected"),
-    [
-        ("鄉東至水社大山西至", 50, "鄉，東，至，水，社，大，山西，至，"),
-        ("中共2017年", 50, "中共，2017，年，"),
-        ("鼓勵長輩", 50, "鼓，勵，長，輩，"),
-        ("他說hello world今天", 50, "他，說，hello， world，今天，"),
-        ("買iPhone15花２０１７％", 50, "買，iPhone15，花，２０１７，％，"),
-        ("口負成長新生兒", 50, "口，負，成，長新，生，兒，"),
-        ("鼓勵長輩", 2, "鼓，勵，長，輩，"),
-        ("中共2017年", 3, "中共，2017，年，"),
-        ("口負成長新生兒", 4, "口，負，成，長新，生，兒，"),
-        ("買AK-47和F-16", 50, "買，AK-47，和，F-16，"),
-        ("COVID-19疫情", 50, "COVID-19，疫情，"),
-        ("圓周率3.14", 50, "圓，周，率，3.14，"),
-        ("2024-10-10", 50, "2024-10-10，"),
-        ("self-driving車", 50, "self-driving，車，"),
-        ("v1.2.3版", 50, "v1.2.3，版，"),
-        ("U.S.政府", 50, "U.S，.，政府，"),
-        ("3-月", 50, "3，-，月，"),
-        ("ＡＫ－４７", 50, "ＡＫ，－，４７，"),
-        ("買AK-47和F-16", 2, "買，AK-47，和，F-16，"),
-    ],
-    ids=[
-        "merged_characters_stay_together",
-        "digit_run",
-        "rare_character",
-        "english_words_with_space",
-        "full_width_run_and_symbol",
-        "token_straddles_two_characters",
-        "chunk_cut_inside_rare_character",
-        "chunk_cut_inside_digit_run",
-        "chunk_cut_before_straddling_token",
-        "dash_joins_letters_and_digits",
-        "dash_joins_word_and_number",
-        "dot_joins_digits",
-        "dashes_join_date",
-        "dash_joins_words",
-        "dots_join_version",
-        "dot_before_chinese_stands_alone",
-        "dash_before_chinese_stands_alone",
-        "full_width_dash_stands_alone",
-        "chunk_cut_inside_dash_joined_run",
-    ],
-)
+@pytest.mark.parametrize(("text", "chunk_size", "expected"), ZH_UNIT_CASES)
 def test_zh_marks_never_split_a_unit(
     qwen_punctuator: TransformersLLMPunctuator,
     text: str,
