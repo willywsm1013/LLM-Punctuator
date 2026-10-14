@@ -7,6 +7,7 @@ import re
 import sys
 from pathlib import Path
 
+from llm_punctuator.asr_punctuator import ASR_MODELS, ASRPunctuator
 from llm_punctuator.punctuator import TransformersLLMPunctuator
 
 
@@ -38,7 +39,10 @@ def get_args() -> argparse.Namespace:
         "-o", "--output_file", type=str, help="Path to the output file. Default: print to stdout"
     )
     parser.add_argument(
-        "-c", "--chunk_size", type=int, default=50, help="Chunk size for processing. Default: 50"
+        "-c",
+        "--chunk_size",
+        type=int,
+        help="Chunk size for a text LLM. Default: 50. An ASR model does not take it",
     )
     parser.add_argument(
         "--k",
@@ -61,9 +65,27 @@ def get_args() -> argparse.Namespace:
         help="Most texts to decode together; only used with --list. "
         "Default: the default of add_punctuation",
     )
+    parser.add_argument(
+        "--audio", type=str, help="Audio file of the text; required with an ASR model"
+    )
+    parser.add_argument(
+        "--context",
+        type=str,
+        help="Context template for an ASR model; each {text} becomes the text. "
+        "Default: the default of add_punctuation",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
+    if args.model_name_or_path in ASR_MODELS:
+        if args.list is not None:
+            parser.error("--list does not support an ASR model")
+        if args.audio is None:
+            parser.error("--audio is required with an ASR model")
+        if args.chunk_size is not None:
+            parser.error("--chunk_size does not apply to an ASR model")
+    elif args.audio is not None or args.context is not None:
+        parser.error("--audio and --context need an ASR model")
     if args.batch_size is not None and args.batch_size < 1:
         parser.error(f"--batch_size must be a positive integer, got {args.batch_size}")
     return args
@@ -154,16 +176,24 @@ if __name__ == "__main__":
         logging.info(f"Original text: {text}")
         logging.info(f"Clean text: {clean_text}")
 
-    # Load the punctuator (no language needed at initialization)
-    punctuator = TransformersLLMPunctuator(args.model_name_or_path)
-
     # Language and punctuations are now handled automatically by add_punctuation
     options = {} if args.k is None else {"k": args.k}
-    if ids is not None and args.batch_size is not None:
-        options["batch_size"] = args.batch_size
-    results = punctuator.add_punctuation(
-        clean_texts, language=args.language, chunk_size=args.chunk_size, **options
-    )
+    if args.model_name_or_path in ASR_MODELS:
+        if args.context is not None:
+            options["context"] = args.context
+        asr_punctuator = ASRPunctuator(args.model_name_or_path)
+        results = asr_punctuator.add_punctuation(
+            clean_texts, [args.audio], language=args.language, **options
+        )
+    else:
+        if ids is not None and args.batch_size is not None:
+            options["batch_size"] = args.batch_size
+        # Load the punctuator (no language needed at initialization)
+        punctuator = TransformersLLMPunctuator(args.model_name_or_path)
+        chunk_size = 50 if args.chunk_size is None else args.chunk_size
+        results = punctuator.add_punctuation(
+            clean_texts, language=args.language, chunk_size=chunk_size, **options
+        )
 
     if ids is None:
         [output] = results
