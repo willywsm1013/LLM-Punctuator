@@ -243,6 +243,41 @@ class ASRPunctuator(ForcedPunctuator):
             use_cache=True,
         ).logits
 
+    def _check_inputs(
+        self,
+        texts: list[str],
+        audios: list[str | tuple[np.ndarray, int]],
+        language: str,
+        punctuations: str | None,
+        k: int,
+    ) -> None:
+        """Raise on the first bad input. Reads no audio and runs no model."""
+        if isinstance(texts, str):
+            raise TypeError("texts must be a list of str, got str. Wrap a single text as [text].")
+        if k == 0 or k < -1:
+            raise ValueError(f"k must be -1 or a positive integer, got {k}")
+        if len(texts) != len(audios):
+            raise ValueError(
+                f"texts and audios must have the same length, got {len(texts)} and {len(audios)}"
+            )
+        if language not in QWEN3_ASR_LANGUAGES:
+            raise ValueError(
+                f"Unsupported language {language!r}. Supported: {', '.join(QWEN3_ASR_LANGUAGES)}"
+            )
+        if punctuations is None:
+            try:
+                self.default_punctuations(language)
+            except ValueError as error:
+                raise ValueError(
+                    f"No default punctuations for language {language!r}. Pass punctuations."
+                ) from error
+        for i, audio in enumerate(audios):
+            if isinstance(audio, str):
+                if not Path(audio).is_file():
+                    raise FileNotFoundError(f"audios[{i}]: no such file: {audio}")
+            elif np.ndim(audio[0]) != 1:
+                raise ValueError(f"audios[{i}] must be a 1-D array, got shape {np.shape(audio[0])}")
+
     @torch.no_grad()
     def add_punctuation(
         self,
@@ -268,7 +303,16 @@ class ASRPunctuator(ForcedPunctuator):
 
         Returns:
             Each text with punctuation added, in the order of texts.
+
+        Raises:
+            TypeError: If texts is a str.
+            ValueError: If k is 0 or below -1, texts and audios differ in length, language is
+                not in ``QWEN3_ASR_LANGUAGES``, language has no default punctuations and
+                punctuations is None, or an array is not 1-D.
+            FileNotFoundError: If an audio path is not a file. Every input is checked before
+                the first audio is read.
         """
+        self._check_inputs(texts, audios, language, punctuations, k)
         if punctuations is None:
             punctuations = self.default_punctuations(language)
         punctuation_tokens = self.punctuation_token_ids(punctuations)

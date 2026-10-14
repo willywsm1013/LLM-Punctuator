@@ -1,5 +1,6 @@
 """Tests for ASRPunctuator: audio input, prompt, and forced decoding."""
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -203,3 +204,86 @@ def test_forward_rejects_pad_count_that_differs_from_audio_vectors(
 
     with pytest.raises(ValueError, match="2 audio pads but 3 audio vectors"):
         forward_all(tiny_asr_punctuator, [151644, AUDIO_TOKEN_ID, AUDIO_TOKEN_ID, 151645])
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error", "message"),
+    [
+        (
+            {"texts": "今天"},
+            TypeError,
+            re.escape("texts must be a list of str, got str. Wrap a single text as [text]."),
+        ),
+        ({"k": 0}, ValueError, "k must be -1 or a positive integer, got 0"),
+        ({"k": -2}, ValueError, "k must be -1 or a positive integer, got -2"),
+        (
+            {"texts": ["今天", "明天"]},
+            ValueError,
+            "texts and audios must have the same length, got 2 and 1",
+        ),
+        (
+            {"language": "zh-TW"},
+            ValueError,
+            "Unsupported language 'zh-TW'. Supported: zh, en, yue, ",
+        ),
+        ({"language": "ko"}, ValueError, "No default punctuations for language 'ko'"),
+        (
+            {"audios": [(np.zeros((2, SAMPLE_RATE), dtype=np.float32), SAMPLE_RATE)]},
+            ValueError,
+            re.escape("audios[0] must be a 1-D array, got shape (2, 16000)"),
+        ),
+        (
+            {"audios": ["/no/such.wav"]},
+            FileNotFoundError,
+            "audios\\[0\\]: no such file: /no/such.wav",
+        ),
+    ],
+    ids=[
+        "str_texts",
+        "k_zero",
+        "k_below_minus_one",
+        "length_mismatch",
+        "regional_tag",
+        "no_default_marks",
+        "2d_array",
+        "missing_file",
+    ],
+)
+def test_add_punctuation_rejects_bad_input(
+    asr_punctuator: ASRPunctuator,
+    wav_path: Path,
+    kwargs: dict,
+    error: type[Exception],
+    message: str,
+) -> None:
+    """Each failure in #26 raises its error with a message that names the problem."""
+    call = {"texts": ["今天"], "audios": [str(wav_path)], **kwargs}
+
+    with pytest.raises(error, match=message):
+        asr_punctuator.add_punctuation(**call)
+
+
+def test_missing_second_file_raises_before_any_audio_is_encoded(
+    asr_punctuator: ASRPunctuator, wav_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All paths are checked before the first text runs."""
+    encoder = FakeAudioEncoder()
+    monkeypatch.setattr(asr_punctuator, "audio_encoder", encoder)
+
+    with pytest.raises(FileNotFoundError, match="audios\\[1\\]"):
+        asr_punctuator.add_punctuation(["今天", "明天"], [str(wav_path), "/no/such.wav"])
+
+    assert encoder.calls == 0
+
+
+def test_unsupported_model_raises_before_loading() -> None:
+    """A name outside ASR_MODELS raises ValueError listing the supported names, and loads nothing."""
+    with (
+        patch("llm_punctuator.asr_punctuator.load_model") as load_model,
+        patch("llm_punctuator.asr_punctuator.AutoTokenizer") as tokenizer_cls,
+        pytest.raises(ValueError, match="Supported: Qwen/Qwen3-ASR-1.7B, Qwen/Qwen3-ASR-0.6B"),
+    ):
+        ASRPunctuator("Qwen/Qwen3-1.7B")
+
+    assert not load_model.called
+    assert not tokenizer_cls.from_pretrained.called
