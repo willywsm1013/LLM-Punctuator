@@ -31,6 +31,16 @@
 - GPU：跑之前看 `nvidia-smi`。有別人的 process 或使用率不是 0 就停，回報等決定。
 - 大檔寫到 `/volume`。0.6B 下載到 `/volume/tts-data/project/willy/LLM-Punctuator/exp/hf-cache`。
 
+## Plan 自己決定、spec 沒定的事
+
+1. `language` 不是 zh/en 又沒給標點時，ASR 用自己的訊息，不用 `default_punctuations` 的訊息。那個訊息說語言不支援，對 ASR 是錯的。見 Task 4。
+2. 音訊向量由第一次 `forward` 用掉，用完就清空。這是 spec 1.3 第 5 點「結束後清掉」的做法。見 Task 3。
+3. #26 只定了 `TypeError` 的訊息。其餘錯誤訊息的字面由本 plan 定。見 Task 4 與 Task 5 的表。
+4. `numpy` 列進依賴，因為程式直接 import 它。`soundfile`、`soxr` 裝進主 checkout 共用的 `.venv`。見 Task 2。
+5. ASR 模型放在 `cuda`，沒有 GPU 時放 `cpu`。dtype 取 config 的 `thinker_config.dtype`，目前是 bfloat16。見 Task 3。
+6. `tests/test_punctuator.py` 的 #24 zh 案例抽成 `ZH_UNIT_CASES`，讓 ASR 測試直接引用。案例只有一份。見 Task 3。
+7. README 不改。新參數由 `example.py --help` 說明。
+
 ## Review Focus
 
 1. `audios` 第二個路徑不存在：第一篇也不該先跑。預期在讀任何音檔前就拋 `FileNotFoundError`。測試在 Task 4。
