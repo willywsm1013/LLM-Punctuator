@@ -66,8 +66,8 @@ QWEN3_ASR_LANGUAGES = {
 def load_audio(audio: str | tuple[np.ndarray, int]) -> np.ndarray:
     """Load audio as a mono 16 kHz float32 waveform in [-1, 1].
 
-    Mirrors qwen_asr's ``normalize_audio_input``, but reads files with soundfile and
-    resamples with soxr. The caller has checked that a path exists and an array is 1-D.
+    Brings the audio to the input Qwen3-ASR takes: mono, ``SAMPLE_RATE``, within [-1, 1].
+    The caller has checked that a path exists and an array is 1-D.
 
     Args:
         audio: A file path, or a ``(waveform, sample_rate)`` pair.
@@ -93,8 +93,8 @@ def load_audio(audio: str | tuple[np.ndarray, int]) -> np.ndarray:
 def build_prompt(context: str, text: str, n_audio: int, language: str) -> str:
     """Build the Qwen3-ASR prompt that ends where the transcript starts.
 
-    Matches qwen_asr's ``_build_text_prompt`` with a forced language, after its processor
-    expands the audio pad to one pad per audio vector.
+    This is the prompt Qwen3-ASR was trained with, with the language forced and the text's
+    context in the system turn. The audio pad is expanded to one pad per audio vector.
 
     Args:
         context: System message template. Only ``{text}`` is replaced; other braces stay.
@@ -144,7 +144,7 @@ def load_model(model_name: str) -> tuple[Qwen3OmniMoeAudioEncoder, Qwen3ForCausa
 
 
 def _without_model_type(config: dict) -> dict:
-    """Return the config without its model_type, which the transformers classes set."""
+    """Return the config without its model_type."""
     return {k: v for k, v in config.items() if k != "model_type"}
 
 
