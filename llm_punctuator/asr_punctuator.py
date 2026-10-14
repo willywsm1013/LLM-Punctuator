@@ -272,11 +272,11 @@ class ASRPunctuator(ForcedPunctuator):
                     f"No default punctuations for language {language!r}. Pass punctuations."
                 ) from error
         for i, audio in enumerate(audios):
-            if isinstance(audio, str):
-                if not Path(audio).is_file():
-                    raise FileNotFoundError(f"audios[{i}]: no such file: {audio}")
-            elif np.ndim(audio[0]) != 1:
+            if not isinstance(audio, str) and np.ndim(audio[0]) != 1:
                 raise ValueError(f"audios[{i}] must be a 1-D array, got shape {np.shape(audio[0])}")
+        for i, audio in enumerate(audios):
+            if isinstance(audio, str) and not Path(audio).is_file():
+                raise FileNotFoundError(f"audios[{i}]: no such file: {audio}")
 
     @torch.no_grad()
     def add_punctuation(

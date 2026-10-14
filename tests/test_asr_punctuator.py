@@ -263,6 +263,19 @@ def test_add_punctuation_rejects_bad_input(
         asr_punctuator.add_punctuation(**call)
 
 
+def test_bad_array_is_reported_before_a_missing_file(
+    asr_punctuator: ASRPunctuator,
+) -> None:
+    """Every array is checked for 1-D before any path is checked for existence."""
+    audios = [
+        "/no/such.wav",
+        (np.zeros((2, SAMPLE_RATE), dtype=np.float32), SAMPLE_RATE),
+    ]
+
+    with pytest.raises(ValueError, match=re.escape("audios[1] must be a 1-D array")):
+        asr_punctuator.add_punctuation(["今天", "明天"], audios)
+
+
 def test_missing_second_file_raises_before_any_audio_is_encoded(
     asr_punctuator: ASRPunctuator, wav_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
