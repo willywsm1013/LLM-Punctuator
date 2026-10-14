@@ -133,8 +133,8 @@ def load_model(model_name: str) -> tuple[Qwen3OmniMoeAudioEncoder, Qwen3ForCausa
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = getattr(torch, config["dtype"])
     with torch.device(device):
-        audio_encoder = Qwen3OmniMoeAudioEncoder(audio_config).to(dtype).eval()
-        model = Qwen3ForCausalLM(text_config).to(dtype).eval()
+        audio_encoder = Qwen3OmniMoeAudioEncoder._from_config(audio_config, dtype=dtype).eval()
+        model = Qwen3ForCausalLM._from_config(text_config, dtype=dtype).eval()
 
     audio_encoder.load_state_dict(_strip_prefix(weights, "thinker.audio_tower."), strict=True)
     lm_weights = {"model." + k: v for k, v in _strip_prefix(weights, "thinker.model.").items()}
