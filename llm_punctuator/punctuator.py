@@ -5,10 +5,11 @@ import logging
 import os
 import re
 from collections.abc import Generator
+from typing import Any
 
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
+from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache, PreTrainedModel
 
 from llm_punctuator.logits_processor import CustomLogitsProcessor
 from llm_punctuator.schema import Message, Role
@@ -28,7 +29,193 @@ ALNUM_RUN = r"[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]+"
 ZH_UNIT = re.compile(rf"\s*(?:{ALNUM_RUN}(?:[-.]{ALNUM_RUN})*|.)", re.DOTALL)
 
 
-class TransformersLLMPunctuator:
+class ForcedPunctuator:
+    """Forced decoding that puts punctuation into a known text.
+
+    Subclasses set self.tokenizer, self.model and self.device, and may override forward.
+    """
+
+    tokenizer: Any
+    model: PreTrainedModel
+    device: torch.device
+
+    @staticmethod
+    def default_punctuations(language: str) -> str:
+        """Return the default punctuation marks of a language.
+
+        Args:
+            language: Language code ("zh" or "en").
+
+        Returns:
+            The default punctuation marks of the language.
+
+        Raises:
+            ValueError: If the language is not supported.
+        """
+        if language == "zh":
+            return ZH_PUNCTUATIONS
+        if language == "en":
+            return EN_PUNCTUATIONS
+        raise ValueError(f"Language {language} is not supported. Supported languages: zh, en")
+
+    def punctuation_token_ids(self, punctuations: str) -> list[int]:
+        """Return the token ID of each punctuation mark, without duplicates.
+
+        Args:
+            punctuations: String of allowed punctuation characters.
+
+        Returns:
+            Token IDs in the order of first appearance.
+        """
+        # Encode punctuation tokens individually to ensure correct token IDs
+        # Some tokenizers might merge consecutive punctuation or handle them differently
+        punctuation_tokens = []
+        for p in punctuations:
+            # Get the token ID for the punctuation mark
+            # We take the last token because some tokenizers might add a start token
+            p_tokens = self.encode_text(p)
+            if p_tokens:
+                punctuation_tokens.append(p_tokens[-1])
+
+        # Remove duplicates while preserving order
+        return list(dict.fromkeys(punctuation_tokens))
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        position_ids: torch.Tensor,
+        cache_position: torch.Tensor,
+        past_key_values: DynamicCache,
+    ) -> torch.Tensor:
+        """Run the model once and return its logits.
+
+        Args:
+            input_ids: Token IDs to feed, shape (batch, width).
+            attention_mask: 2D mask over the cache and the fed tokens.
+            position_ids: Position of each fed token.
+            cache_position: Cache slot of each fed token.
+            past_key_values: Cache that this call extends.
+
+        Returns:
+            Logits of each fed token.
+        """
+        return self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            cache_position=cache_position,
+            past_key_values=past_key_values,
+            use_cache=True,
+        ).logits
+
+    def split_segments(self, text: str, language: str) -> list[list[int]]:
+        """Encode text and group its tokens into segments a mark may not go inside.
+
+        A mark may go only where a segment ends. For zh, a segment ends where a unit ends and
+        the next token does not start inside that unit. A unit is one Chinese character, one
+        run of letters or digits, or one other character, with the whitespace before it.
+        Full-width letters and digits count as letters and digits. A half-width "-" or "."
+        with a letter or digit on both sides joins the runs on its two sides into one run.
+        A token that covers two units, such as one token for two characters, stays in one
+        segment. For other languages, each token is a segment.
+
+        Args:
+            text: Text to split.
+            language: Language code of the text.
+
+        Returns:
+            Token IDs of each segment, in text order. Together they are the tokenizer's
+            encoding of the whole text.
+        """
+        if language != "zh":
+            return [[token] for token in self.encode_text(text)]
+
+        encoding = self.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+        tokens, offsets = encoding["input_ids"], encoding["offset_mapping"]
+        unit_ends = set(itertools.accumulate(len(unit) for unit in ZH_UNIT.findall(text)))
+        cuts = [
+            i + 1
+            for i in range(len(tokens) - 1)
+            if offsets[i][1] in unit_ends and offsets[i + 1][0] >= offsets[i][1]
+        ]
+        bounds = [0, *cuts, len(tokens)]
+        return [tokens[start:end] for start, end in itertools.pairwise(bounds)]
+
+    def encode_text(self, text: str) -> list[int]:
+        """Encode text to token IDs, removing special tokens.
+
+        Args:
+            text: Text to encode.
+
+        Returns:
+            List of token IDs without BOS/EOS tokens.
+        """
+        text_tokens = self.tokenizer.encode(text)
+        if text_tokens[0] == self.tokenizer.bos_token_id:
+            text_tokens = text_tokens[1:]
+        if text_tokens[-1] == self.tokenizer.eos_token_id:
+            text_tokens = text_tokens[:-1]
+        return text_tokens
+
+    def decode(self, tokens: list[int], skip_special_tokens: bool = True) -> str:
+        """Decode token IDs to text.
+
+        Args:
+            tokens: List of token IDs to decode.
+            skip_special_tokens: Whether to skip special tokens in output.
+
+        Returns:
+            Decoded text string.
+        """
+        return self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
+
+    def greedy_search(self, jobs: list[ChunkJob], k: int) -> list[list[int]]:
+        """Greedy decoding of several rows together, deciding up to k mark positions per forward.
+
+        Each forward feeds every unfinished row, see GreedyRow. Rows put marks in different
+        places, so the shared cache is never cropped. Text a row fed after its mark stays in
+        the cache, masked out of that row's attention, and each row keeps its own positions.
+        The mask is 2D, so transformers builds the causal mask each attention backend needs.
+
+        Args:
+            jobs: The prompt token IDs and the rule of each row.
+            k: Most positions where a mark may go to decide per row per forward. -1 for all.
+
+        Returns:
+            Generated token IDs of each row, without the EOS token.
+        """
+        rows = [GreedyRow(prompt_ids, rule) for prompt_ids, rule in jobs]
+        cache = DynamicCache()
+        seen = torch.zeros(len(rows), 0, dtype=torch.long)
+        positions = [0] * len(rows)
+        while not all(row.done for row in rows):
+            feeds = [[] if row.done else row.feed(k) for row in rows]
+            width = max(map(len, feeds))
+            # Padding follows each row's feed: causal attention hides it, and kept drops it from
+            # seen. So its token ID does not matter.
+            ids = torch.full((len(rows), width), self.tokenizer.eos_token_id)
+            position_ids = torch.zeros(len(rows), width, dtype=torch.long)
+            for b, fed in enumerate(feeds):
+                ids[b, : len(fed)] = torch.tensor(fed, dtype=torch.long)
+                position_ids[b, : len(fed)] = torch.arange(positions[b], positions[b] + len(fed))
+            past = seen.shape[1]
+            seen = torch.cat([seen, torch.ones(len(rows), width, dtype=torch.long)], dim=1)
+            logits = self.forward(
+                input_ids=ids.to(self.device),
+                attention_mask=seen.to(self.device),
+                position_ids=position_ids.to(self.device),
+                cache_position=torch.arange(past, past + width, device=self.device),
+                past_key_values=cache,
+            )
+            for b, row in enumerate(rows):
+                kept = row.take(logits[b]) if feeds[b] else 0
+                seen[b, past + kept :] = 0
+                positions[b] += kept
+        return [row.emitted[:-1] for row in rows]
+
+
+class TransformersLLMPunctuator(ForcedPunctuator):
     """Base class for transformer-based LLM punctuators.
 
     This class provides common functionality for all transformer-based punctuators,
@@ -152,14 +339,7 @@ class TransformersLLMPunctuator:
 
         # Select default punctuations based on language if not provided
         if punctuations is None:
-            if language == "zh":
-                punctuations = ZH_PUNCTUATIONS
-            elif language == "en":
-                punctuations = EN_PUNCTUATIONS
-            else:
-                raise ValueError(
-                    f"Language {language} is not supported. Supported languages: zh, en"
-                )
+            punctuations = self.default_punctuations(language)
 
         # Select default system prompt based on language if not provided
         if system_prompt is None:
@@ -180,18 +360,7 @@ class TransformersLLMPunctuator:
             # If the prompt doesn't have the placeholder, just use it as is
             pass
 
-        # Encode punctuation tokens individually to ensure correct token IDs
-        # Some tokenizers might merge consecutive punctuation or handle them differently
-        punctuation_tokens = []
-        for p in punctuations:
-            # Get the token ID for the punctuation mark
-            # We take the last token because some tokenizers might add a start token
-            p_tokens = self.encode_text(p)
-            if p_tokens:
-                punctuation_tokens.append(p_tokens[-1])
-
-        # Remove duplicates while preserving order
-        punctuation_tokens = list(dict.fromkeys(punctuation_tokens))
+        punctuation_tokens = self.punctuation_token_ids(punctuations)
 
         loops = [
             self.punctuate_chunks(text, language, system_prompt, punctuation_tokens, chunk_size)
@@ -307,39 +476,6 @@ class TransformersLLMPunctuator:
         result = self.decode(result_tokens)
         return result
 
-    def split_segments(self, text: str, language: str) -> list[list[int]]:
-        """Encode text and group its tokens into segments a mark may not go inside.
-
-        A mark may go only where a segment ends. For zh, a segment ends where a unit ends and
-        the next token does not start inside that unit. A unit is one Chinese character, one
-        run of letters or digits, or one other character, with the whitespace before it.
-        Full-width letters and digits count as letters and digits. A half-width "-" or "."
-        with a letter or digit on both sides joins the runs on its two sides into one run.
-        A token that covers two units, such as one token for two characters, stays in one
-        segment. For other languages, each token is a segment.
-
-        Args:
-            text: Text to split.
-            language: Language code of the text.
-
-        Returns:
-            Token IDs of each segment, in text order. Together they are the tokenizer's
-            encoding of the whole text.
-        """
-        if language != "zh":
-            return [[token] for token in self.encode_text(text)]
-
-        encoding = self.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
-        tokens, offsets = encoding["input_ids"], encoding["offset_mapping"]
-        unit_ends = set(itertools.accumulate(len(unit) for unit in ZH_UNIT.findall(text)))
-        cuts = [
-            i + 1
-            for i in range(len(tokens) - 1)
-            if offsets[i][1] in unit_ends and offsets[i + 1][0] >= offsets[i][1]
-        ]
-        bounds = [0, *cuts, len(tokens)]
-        return [tokens[start:end] for start, end in itertools.pairwise(bounds)]
-
     @staticmethod
     def chunk_segments(segments: list[list[int]], chunk_size: int) -> list[list[list[int]]]:
         """Group consecutive segments into chunks without splitting a segment.
@@ -361,34 +497,6 @@ class TransformersLLMPunctuator:
             chunks[-1].append(segment)
             size += len(segment)
         return chunks
-
-    def encode_text(self, text: str) -> list[int]:
-        """Encode text to token IDs, removing special tokens.
-
-        Args:
-            text: Text to encode.
-
-        Returns:
-            List of token IDs without BOS/EOS tokens.
-        """
-        text_tokens = self.tokenizer.encode(text)
-        if text_tokens[0] == self.tokenizer.bos_token_id:
-            text_tokens = text_tokens[1:]
-        if text_tokens[-1] == self.tokenizer.eos_token_id:
-            text_tokens = text_tokens[:-1]
-        return text_tokens
-
-    def decode(self, tokens: list[int], skip_special_tokens: bool = True) -> str:
-        """Decode token IDs to text.
-
-        Args:
-            tokens: List of token IDs to decode.
-            skip_special_tokens: Whether to skip special tokens in output.
-
-        Returns:
-            Decoded text string.
-        """
-        return self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
 
     def remove_punctuation(
         self, generated_tokens: list[int], punctuation_tokens: list[int], is_last_chunk: bool
@@ -421,51 +529,6 @@ class TransformersLLMPunctuator:
             while generated_tokens and generated_tokens[-1] in punctuation_set:
                 generated_tokens = generated_tokens[:-1]
             return generated_tokens
-
-    def greedy_search(self, jobs: list[ChunkJob], k: int) -> list[list[int]]:
-        """Greedy decoding of several rows together, deciding up to k mark positions per forward.
-
-        Each forward feeds every unfinished row, see GreedyRow. Rows put marks in different
-        places, so the shared cache is never cropped. Text a row fed after its mark stays in
-        the cache, masked out of that row's attention, and each row keeps its own positions.
-        The mask is 2D, so transformers builds the causal mask each attention backend needs.
-
-        Args:
-            jobs: The prompt token IDs and the rule of each row.
-            k: Most positions where a mark may go to decide per row per forward. -1 for all.
-
-        Returns:
-            Generated token IDs of each row, without the EOS token.
-        """
-        rows = [GreedyRow(prompt_ids, rule) for prompt_ids, rule in jobs]
-        cache = DynamicCache()
-        seen = torch.zeros(len(rows), 0, dtype=torch.long)
-        positions = [0] * len(rows)
-        while not all(row.done for row in rows):
-            feeds = [[] if row.done else row.feed(k) for row in rows]
-            width = max(map(len, feeds))
-            # Padding follows each row's feed: causal attention hides it, and kept drops it from
-            # seen. So its token ID does not matter.
-            ids = torch.full((len(rows), width), self.tokenizer.eos_token_id)
-            position_ids = torch.zeros(len(rows), width, dtype=torch.long)
-            for b, fed in enumerate(feeds):
-                ids[b, : len(fed)] = torch.tensor(fed, dtype=torch.long)
-                position_ids[b, : len(fed)] = torch.arange(positions[b], positions[b] + len(fed))
-            past = seen.shape[1]
-            seen = torch.cat([seen, torch.ones(len(rows), width, dtype=torch.long)], dim=1)
-            logits = self.model(
-                input_ids=ids.to(self.device),
-                attention_mask=seen.to(self.device),
-                position_ids=position_ids.to(self.device),
-                cache_position=torch.arange(past, past + width, device=self.device),
-                past_key_values=cache,
-                use_cache=True,
-            ).logits
-            for b, row in enumerate(rows):
-                kept = row.take(logits[b]) if feeds[b] else 0
-                seen[b, past + kept :] = 0
-                positions[b] += kept
-        return [row.emitted[:-1] for row in rows]
 
 
 class GreedyRow:

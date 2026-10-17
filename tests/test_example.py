@@ -11,6 +11,7 @@ import pytest
 from example import clean_zh_text
 
 EXAMPLE_PATH = Path(__file__).resolve().parent.parent / "example.py"
+ASR_MODEL = "Qwen/Qwen3-ASR-1.7B"
 
 
 class FullStopPunctuator:
@@ -27,6 +28,20 @@ class FullStopPunctuator:
         return [f"{text}。" for text in texts]
 
 
+class FakeASRPunctuator:
+    """Fake ASR punctuator that ends each text with a full stop and keeps the last call."""
+
+    last_call: dict[str, object] = {}
+
+    def __init__(self, model_name: str) -> None:
+        """Skip loading a model."""
+
+    def add_punctuation(self, texts: list[str], audios: list[str], **kwargs: object) -> list[str]:
+        """Append a full stop to each text."""
+        FakeASRPunctuator.last_call = {"texts": texts, "audios": audios, **kwargs}
+        return [f"{text}。" for text in texts]
+
+
 class UnloadablePunctuator:
     """Fake punctuator whose model fails to load, like a missing -m path."""
 
@@ -35,11 +50,23 @@ class UnloadablePunctuator:
         raise OSError(f"{model_name_or_path} not found")
 
 
-def run_example(argv: list[str], punctuator: type = FullStopPunctuator) -> None:
-    """Run example.py as a script with argv and a fake punctuator."""
+@pytest.fixture(autouse=True)
+def reset_recorded_calls() -> None:
+    """Forget the calls the fakes recorded in an earlier test."""
+    FullStopPunctuator.last_kwargs = {}
+    FakeASRPunctuator.last_call = {}
+
+
+def run_example(
+    argv: list[str],
+    punctuator: type = FullStopPunctuator,
+    asr_punctuator: type = FakeASRPunctuator,
+) -> None:
+    """Run example.py as a script with argv and fake punctuators."""
     with (
         patch.object(sys, "argv", ["example.py", *argv]),
         patch("llm_punctuator.punctuator.TransformersLLMPunctuator", punctuator),
+        patch("llm_punctuator.asr_punctuator.ASRPunctuator", asr_punctuator),
     ):
         runpy.run_path(str(EXAMPLE_PATH), run_name="__main__")
 
@@ -249,3 +276,74 @@ class TestListOption:
 
         assert exc_info.value.code != 0
         assert "--batch_size must be a positive integer, got 0" in capsys.readouterr().err
+
+
+def test_asr_model_punctuates_cleaned_text_with_its_audio(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An ASR -m gets the cleaned text, the audio path, and the language."""
+    run_example(["-m", ASR_MODEL, "--audio", "a.wav", "--text", "今天 天氣"])
+
+    assert capsys.readouterr().out == "今天天氣。\n"
+    assert FakeASRPunctuator.last_call == {
+        "texts": ["今天天氣"],
+        "audios": ["a.wav"],
+        "language": "zh",
+    }
+
+
+def test_asr_context_reaches_add_punctuation() -> None:
+    """--context is passed through as context."""
+    run_example(
+        ["-m", ASR_MODEL, "--audio", "a.wav", "--text", "今天", "--context", "主題：{text}"]
+    )
+
+    assert FakeASRPunctuator.last_call["context"] == "主題：{text}"
+
+
+def test_asr_k_reaches_add_punctuation() -> None:
+    """--k is passed through as k."""
+    run_example(["-m", ASR_MODEL, "--audio", "a.wav", "--text", "今天", "--k", "3"])
+
+    assert FakeASRPunctuator.last_call["k"] == 3
+
+
+def test_text_llm_without_chunk_size_still_uses_50() -> None:
+    """-c defaults to None in argparse, but the text LLM still gets 50."""
+    run_example(["--text", "今天"])
+
+    assert FullStopPunctuator.last_kwargs["chunk_size"] == 50
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["-m", ASR_MODEL, "--text", "今天"], "--audio is required with an ASR model"),
+        (
+            ["-m", ASR_MODEL, "--audio", "a.wav", "--text", "今天", "-c", "50"],
+            "--chunk_size does not apply to an ASR model",
+        ),
+        (
+            ["-m", ASR_MODEL, "--audio", "a.wav", "--list", "x.jsonl"],
+            "--list does not support an ASR model",
+        ),
+        (["--audio", "a.wav", "--text", "今天"], "--audio and --context need an ASR model"),
+        (["--context", "{text}", "--text", "今天"], "--audio and --context need an ASR model"),
+    ],
+    ids=[
+        "asr_without_audio",
+        "asr_with_chunk_size",
+        "asr_with_list",
+        "text_llm_with_audio",
+        "text_llm_with_context",
+    ],
+)
+def test_invalid_model_and_option_combination_exits_2(
+    capsys: pytest.CaptureFixture[str], argv: list[str], message: str
+) -> None:
+    """Each combination #26 forbids exits 2 with its message on stderr."""
+    with pytest.raises(SystemExit) as exc_info:
+        run_example(argv)
+
+    assert exc_info.value.code == 2
+    assert message in capsys.readouterr().err
