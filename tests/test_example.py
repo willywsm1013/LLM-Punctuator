@@ -325,7 +325,11 @@ def test_text_llm_without_chunk_size_still_uses_50() -> None:
         ),
         (
             ["-m", ASR_MODEL, "--audio", "a.wav", "--list", "x.jsonl"],
-            "--list does not support an ASR model",
+            "--audio does not apply to --list",
+        ),
+        (
+            ["-m", ASR_MODEL, "--list", "x.jsonl", "-b", "2"],
+            "--batch_size does not apply to an ASR model",
         ),
         (["--audio", "a.wav", "--text", "今天"], "--audio and --context need an ASR model"),
         (["--context", "{text}", "--text", "今天"], "--audio and --context need an ASR model"),
@@ -333,7 +337,8 @@ def test_text_llm_without_chunk_size_still_uses_50() -> None:
     ids=[
         "asr_without_audio",
         "asr_with_chunk_size",
-        "asr_with_list",
+        "asr_list_with_audio",
+        "asr_with_batch_size",
         "text_llm_with_audio",
         "text_llm_with_context",
     ],
@@ -341,9 +346,113 @@ def test_text_llm_without_chunk_size_still_uses_50() -> None:
 def test_invalid_model_and_option_combination_exits_2(
     capsys: pytest.CaptureFixture[str], argv: list[str], message: str
 ) -> None:
-    """Each combination #26 forbids exits 2 with its message on stderr."""
+    """Each forbidden combination exits 2 with its message on stderr."""
     with pytest.raises(SystemExit) as exc_info:
         run_example(argv)
 
     assert exc_info.value.code == 2
     assert message in capsys.readouterr().err
+
+
+class TestASRListOption:
+    """Test punctuating a JSONL list with an ASR model."""
+
+    @pytest.fixture
+    def data_dir(self, tmp_path: Path) -> Path:
+        """A directory holding two texts and their audio files."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "a.txt").write_text("今天天氣\n很好", encoding="utf-8")
+        (data_dir / "a.wav").write_bytes(b"")
+        (data_dir / "b.txt").write_text("我們去公園", encoding="utf-8")
+        (data_dir / "b.wav").write_bytes(b"")
+        return data_dir
+
+    def test_asr_list_punctuates_each_text_with_its_audio_in_list_order(
+        self, data_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Each line's audio resolves against the list file and pairs with its text."""
+        list_path = write_list(
+            tmp_path / "lists" / "list.jsonl",
+            [
+                '{"id": "b", "path": "../data/b.txt", "audio": "../data/b.wav"}',
+                '{"id": "a", "path": "../data/a.txt", "audio": "../data/a.wav"}',
+            ],
+        )
+
+        run_example(["-m", ASR_MODEL, "--list", str(list_path)])
+
+        lines = capsys.readouterr().out.splitlines()
+        assert [json.loads(line) for line in lines] == [
+            {"id": "b", "text": "我們去公園。"},
+            {"id": "a", "text": "今天天氣很好。"},
+        ]
+        assert FakeASRPunctuator.last_call["audios"] == [
+            str(list_path.parent / "../data/b.wav"),
+            str(list_path.parent / "../data/a.wav"),
+        ]
+
+    def test_single_entry_asr_list_punctuates_same_as_file_and_audio(
+        self, data_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--file with --audio and a one-line --list give the same punctuated text."""
+        list_path = write_list(
+            data_dir / "list.jsonl", ['{"id": "a", "path": "a.txt", "audio": "a.wav"}']
+        )
+        run_example(
+            ["-m", ASR_MODEL, "--file", str(data_dir / "a.txt"), "--audio", str(data_dir / "a.wav")]
+        )
+        file_text = capsys.readouterr().out.rstrip("\n")
+
+        run_example(["-m", ASR_MODEL, "--list", str(list_path)])
+
+        assert json.loads(capsys.readouterr().out)["text"] == file_text
+
+    @pytest.mark.parametrize(
+        "bad_line, message",
+        [
+            ('{"id": "b", "path": "b.txt"}', '"audio"'),
+            ('{"id": "b", "path": "b.txt", "audio": "missing.wav"}', "audio file not found"),
+        ],
+        ids=["missing_audio", "missing_audio_file"],
+    )
+    def test_asr_list_error_exits_1_with_line_number_before_loading_model(
+        self, data_dir: Path, capsys: pytest.CaptureFixture[str], bad_line: str, message: str
+    ) -> None:
+        """A bad audio field exits 1 naming the line, even when the model cannot load."""
+        list_path = write_list(
+            data_dir / "list.jsonl",
+            ['{"id": "a", "path": "a.txt", "audio": "a.wav"}', "", bad_line],
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_example(
+                ["-m", ASR_MODEL, "--list", str(list_path)], asr_punctuator=UnloadablePunctuator
+            )
+
+        assert exc_info.value.code == 1
+        stderr = capsys.readouterr().err
+        assert f"{list_path}:3:" in stderr
+        assert message in stderr
+
+    def test_text_llm_list_ignores_audio_field(
+        self, data_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A text LLM gives the same output whether or not lines carry audio."""
+        without_audio = write_list(
+            data_dir / "without.jsonl",
+            ['{"id": "a", "path": "a.txt"}', '{"id": "b", "path": "b.txt"}'],
+        )
+        with_audio = write_list(
+            data_dir / "with.jsonl",
+            [
+                '{"id": "a", "path": "a.txt", "audio": "a.wav"}',
+                '{"id": "b", "path": "b.txt", "audio": "missing.wav"}',
+            ],
+        )
+        run_example(["--list", str(without_audio)])
+        expected = capsys.readouterr().out
+
+        run_example(["--list", str(with_audio)])
+
+        assert capsys.readouterr().out == expected
