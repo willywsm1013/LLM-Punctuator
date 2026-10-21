@@ -226,6 +226,7 @@ class TestListOption:
             ('{"id": "b", "path": ', "invalid JSON"),
             ('{"path": "b.txt"}', '"id" and "path"'),
             ('{"id": "b"}', '"id" and "path"'),
+            ('{"id": "b", "path": null}', '"id" and "path"'),
             ('{"id": "a", "path": "b.txt"}', "duplicate id 'a'"),
             ('{"id": "b", "path": "missing.txt"}', "file not found"),
             ('{"id": "b", "path": "big5.txt"}', "not UTF-8"),
@@ -234,6 +235,7 @@ class TestListOption:
             "invalid_json",
             "missing_id",
             "missing_path",
+            "null_path",
             "duplicate_id",
             "missing_file",
             "non_utf8_file",
@@ -412,9 +414,10 @@ class TestASRListOption:
         "bad_line, message",
         [
             ('{"id": "b", "path": "b.txt"}', '"audio"'),
+            ('{"id": "b", "path": "b.txt", "audio": null}', '"audio"'),
             ('{"id": "b", "path": "b.txt", "audio": "missing.wav"}', "audio file not found"),
         ],
-        ids=["missing_audio", "missing_audio_file"],
+        ids=["missing_audio", "null_audio", "missing_audio_file"],
     )
     def test_asr_list_error_exits_1_with_line_number_before_loading_model(
         self, data_dir: Path, capsys: pytest.CaptureFixture[str], bad_line: str, message: str

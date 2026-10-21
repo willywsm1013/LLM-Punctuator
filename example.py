@@ -63,11 +63,13 @@ def get_args() -> argparse.Namespace:
         "-b",
         "--batch_size",
         type=int,
-        help="Most texts to decode together; only used with --list. "
+        help="Most texts to decode together; only used with --list and a text LLM. "
         "Default: the default of add_punctuation",
     )
     parser.add_argument(
-        "--audio", type=str, help="Audio file of the text; required with an ASR model"
+        "--audio",
+        type=str,
+        help="Audio file of the text; required with an ASR model and --file or --text",
     )
     parser.add_argument(
         "--context",
@@ -122,9 +124,9 @@ def read_list(list_path: Path, with_audio: bool) -> list[tuple[object, str, str 
         relative path or audio is resolved against the list file's directory.
 
     Raises:
-        ValueError: If a line is not valid JSON, lacks id or path, repeats an earlier id, or
-            points to a missing or non-UTF-8 file. With with_audio, also if a line lacks audio
-            or its audio file is missing. The message names the line number.
+        ValueError: If a line is not valid JSON, lacks id or a string path, repeats an earlier id, or
+            points to a missing or non-UTF-8 file. With with_audio, also if a line lacks a string
+            audio or its audio file is missing. The message names the line number.
     """
     entries = []
     seen_ids = set()
@@ -137,7 +139,11 @@ def read_list(list_path: Path, with_audio: bool) -> list[tuple[object, str, str 
                 item = json.loads(line)
             except json.JSONDecodeError as e:
                 raise ValueError(f"{where}: invalid JSON: {e.msg}") from e
-            if not isinstance(item, dict) or "id" not in item or "path" not in item:
+            if (
+                not isinstance(item, dict)
+                or "id" not in item
+                or not isinstance(item.get("path"), str)
+            ):
                 raise ValueError(f'{where}: expected a JSON object with "id" and "path"')
             if item["id"] in seen_ids:
                 raise ValueError(f"{where}: duplicate id {item['id']!r}")
@@ -156,7 +162,7 @@ def read_list(list_path: Path, with_audio: bool) -> list[tuple[object, str, str 
 
 def resolve_audio(item: dict, list_path: Path, where: str) -> str:
     """Return the existing audio file a list line names, or raise ValueError naming where."""
-    if "audio" not in item:
+    if not isinstance(item.get("audio"), str):
         raise ValueError(f'{where}: expected "audio" with an ASR model')
     audio = list_path.parent / item["audio"]
     if not audio.is_file():
