@@ -67,21 +67,36 @@ class CustomLogitsProcessor(LogitsProcessor):
             f"has_prev_input={has_prev_input}"
         )
 
-    def _count_generated_text_tokens(self, generated_ids: torch.LongTensor) -> int:
+    def _count_generated_text_tokens(self, generated_ids: torch.LongTensor) -> tuple[int, int]:
         """Count how many original text tokens have been generated.
 
         Args:
             generated_ids: The generated token IDs (excluding prompt).
 
         Returns:
-            Number of original text tokens that have been generated.
+            Number of original text tokens that have been generated, and how many had been
+            generated when the last mark was. 0 if no mark has been generated.
         """
-        count = 0
+        count = last_mark = 0
         for token_id in generated_ids:
             token_id_item = token_id.item()
             if count < len(self.text_tokens_only) and token_id_item == self.text_tokens_only[count]:
                 count += 1
-        return count
+            else:
+                last_mark = count
+        return count, last_mark
+
+    def mark_bonus(self, num_text_tokens_generated: int, last_mark: int) -> float:
+        """Return what to add to the score of every mark. 0 here.
+
+        Args:
+            num_text_tokens_generated: How many text tokens have been generated so far.
+            last_mark: How many text tokens had been generated when the last mark was, or 0.
+
+        Returns:
+            The bonus.
+        """
+        return 0.0
 
     def allowed_tokens(self, num_text_tokens_generated: int, last_token_id: int | None) -> set[int]:
         """Determine which tokens are allowed based on current generation state.
@@ -130,7 +145,7 @@ class CustomLogitsProcessor(LogitsProcessor):
         generated_ids = input_ids[0, self.prompt_length :]
 
         # Count how many text tokens have been generated
-        num_text_tokens_generated = self._count_generated_text_tokens(generated_ids)
+        num_text_tokens_generated, last_mark = self._count_generated_text_tokens(generated_ids)
 
         # Get the last generated token (if any)
         last_token_id = generated_ids[-1].item() if len(generated_ids) > 0 else None
@@ -142,6 +157,8 @@ class CustomLogitsProcessor(LogitsProcessor):
         mask = torch.full_like(scores, float("-inf"))
         for token_id in allowed_tokens:
             mask[:, token_id] = scores[:, token_id]
+        marks = list(allowed_tokens & self.punctuation_tokens)
+        mask[:, marks] += self.mark_bonus(num_text_tokens_generated, last_mark)
 
         logger.debug(
             f"Generated {num_text_tokens_generated}/{len(self.text_tokens_only)} text tokens, "
@@ -149,3 +166,36 @@ class CustomLogitsProcessor(LogitsProcessor):
         )
 
         return mask
+
+
+class DistanceBonusProcessor(CustomLogitsProcessor):
+    """CustomLogitsProcessor that favors a mark more the further it is from the last mark."""
+
+    def __init__(
+        self,
+        original_text_tokens: list[int],
+        punctuation_tokens: list[int],
+        has_prev_input: bool,
+        unit_ends: set[int],
+        char_counts: list[int],
+        distance_bonus: float,
+    ) -> None:
+        """Initialize the processor.
+
+        Args:
+            original_text_tokens: As in CustomLogitsProcessor.
+            punctuation_tokens: As in CustomLogitsProcessor.
+            has_prev_input: As in CustomLogitsProcessor.
+            unit_ends: As in CustomLogitsProcessor.
+            char_counts: Non-whitespace characters in the first p text tokens, for each p from
+                0 to the number of text tokens.
+            distance_bonus: Bonus per character since the last mark.
+        """
+        super().__init__(original_text_tokens, punctuation_tokens, has_prev_input, unit_ends)
+        self.char_counts = char_counts
+        self.distance_bonus = distance_bonus
+
+    def mark_bonus(self, num_text_tokens_generated: int, last_mark: int) -> float:
+        """Return distance_bonus times the characters generated since the last mark."""
+        distance = self.char_counts[num_text_tokens_generated] - self.char_counts[last_mark]
+        return self.distance_bonus * distance

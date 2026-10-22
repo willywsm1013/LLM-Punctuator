@@ -535,10 +535,10 @@ class GreedyRow:
     """One row of greedy_search: a chunk decoded under its rule, a few positions per forward.
 
     The text is known, so one forward over the tokens not yet fed plus the upcoming text gives
-    the scores at every upcoming position. Each position takes the highest scoring allowed
-    token, ties going to the lowest token ID as in step-by-step greedy decoding. Where a mark
-    wins, the text fed after it was in the wrong place, and the next forward continues after
-    the mark.
+    the scores at every upcoming position. Each mark's score gets the rule's mark bonus. Each
+    position takes the highest scoring allowed token, ties going to the lowest token ID as in
+    step-by-step greedy decoding. Where a mark wins, the text fed after it was in the wrong
+    place, and the next forward continues after the mark.
     """
 
     def __init__(self, prompt_ids: list[int], rule: CustomLogitsProcessor) -> None:
@@ -551,6 +551,7 @@ class GreedyRow:
         self.rule = rule
         self.targets = rule.original_text_tokens
         self.emitted: list[int] = []
+        self.last_mark = 0
         self.pending = prompt_ids
         self.start = 0
         self.end = 0
@@ -578,12 +579,16 @@ class GreedyRow:
         rows = logits[len(pending) - 1 : fed_len, candidates].float().tolist()
         for pos in range(start, self.end + 1):
             score = dict(zip(candidates, rows[pos - start], strict=True))
+            bonus = self.rule.mark_bonus(pos, self.last_mark)
+            for mark in self.rule.punctuation_tokens:
+                score[mark] += bonus
             allowed = self.rule.allowed_tokens(pos, self.emitted[-1] if self.emitted else None)
             choice = max(sorted(allowed), key=score.__getitem__)
             self.emitted.append(choice)
             due = self.targets[pos]
             if choice != due:
                 self.emitted.append(due)
+                self.last_mark = pos
                 self.pending = [choice, due]
                 break
         else:

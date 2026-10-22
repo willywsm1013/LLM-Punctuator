@@ -1,5 +1,6 @@
 """Tests for TransformersLLMPunctuator: decoding and where marks may go."""
 
+import itertools
 import re
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -8,7 +9,7 @@ import pytest
 import torch
 from transformers import AutoTokenizer, DynamicCache, Qwen3Config, Qwen3ForCausalLM
 
-from llm_punctuator.logits_processor import CustomLogitsProcessor
+from llm_punctuator.logits_processor import CustomLogitsProcessor, DistanceBonusProcessor
 from llm_punctuator.punctuator import ChunkJob, TransformersLLMPunctuator
 from llm_punctuator.schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
 
@@ -242,16 +243,25 @@ def test_en_marks_go_between_tokens_as_before(
 
 
 def step_by_step_greedy(
-    prompt: list[int], rule: CustomLogitsProcessor, model: object | None = None
+    prompt: list[int],
+    rule: CustomLogitsProcessor,
+    model: object | None = None,
+    distance_bonus: float = 0.0,
 ) -> list[int]:
     """Decode one token per forward with the rule as a logits processor, without EOS.
 
-    The model defaults to PrefixScoreModel. Each forward starts from an empty cache.
+    Before the rule, every mark gets distance_bonus times the non-whitespace characters
+    generated since the last mark, with one character per token as in CharTokenizer. The model
+    defaults to PrefixScoreModel. Each forward starts from an empty cache.
     """
     model = model or PrefixScoreModel()
+    marks = sorted(rule.punctuation_tokens)
     ids = torch.tensor([prompt])
     while ids[0, -1].item() != rule.original_text_tokens[-1]:
         scores = model(ids, past_key_values=DynamicCache()).logits[:, -1]
+        generated = ids[0, len(prompt) :].tolist()
+        since_mark = itertools.takewhile(lambda t: t not in marks, reversed(generated))
+        scores[:, marks] += distance_bonus * sum(not chr(t).isspace() for t in since_mark)
         next_id = rule(ids, scores).argmax(dim=-1, keepdim=True)
         ids = torch.cat([ids, next_id], dim=1)
     return ids[0, len(prompt) : -1].tolist()
@@ -283,6 +293,36 @@ def test_greedy_search_matches_step_by_step_greedy(
     results = punctuator.greedy_search([new_job(*row) for row in rows], k)
 
     assert results == [step_by_step_greedy(*new_job(*row)) for row in rows]
+
+
+@pytest.mark.parametrize("distance_bonus", [0.0, 0.25], ids=["no_bonus", "bonus"])
+@pytest.mark.parametrize("k", [-1, 1, 16], ids=["k_all", "k_1", "k_16"])
+def test_greedy_search_with_distance_bonus_matches_step_by_step_greedy(
+    punctuator: TransformersLLMPunctuator, k: int, distance_bonus: float
+) -> None:
+    """Rows of a distance bonus rule get what one token per forward gives with the same bonus."""
+    punctuator.model = PrefixScoreModel()
+    marks = [ord(p) for p in ZH_PUNCTUATIONS]
+    texts = [
+        ("[user]", "今天在2017年 天氣很好我們去公園散步然後回家吃飯再去睡覺", False),
+        ("[system]說明[user]", "去公園散步然後回家吃飯", True),
+    ]
+    jobs, references = [], []
+    for prompt, text, has_prev_input in texts:
+        tokens = punctuator.encode_text(text)
+        unit_ends = set(range(1, len(tokens) + 1))
+        char_counts = [sum(not c.isspace() for c in text[:p]) for p in range(len(text) + 1)]
+        prompt_ids = punctuator.encode_text(prompt)
+        rule = DistanceBonusProcessor(
+            tokens + [EOS_ID], marks, has_prev_input, unit_ends, char_counts, distance_bonus
+        )
+        jobs.append((prompt_ids, rule))
+        plain = CustomLogitsProcessor(tokens + [EOS_ID], marks, has_prev_input, unit_ends)
+        references.append(step_by_step_greedy(prompt_ids, plain, distance_bonus=distance_bonus))
+
+    results = punctuator.greedy_search(jobs, k)
+
+    assert results == references
 
 
 @pytest.mark.parametrize("k", [-1, 1], ids=["k_all", "k_1"])

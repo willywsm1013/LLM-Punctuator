@@ -114,6 +114,17 @@ def asr_punctuator() -> ASRPunctuator:
         return ASRPunctuator(ASR_MODEL)
 
 
+@pytest.fixture(scope="module")
+def mark_gap_punctuator() -> ASRPunctuator:
+    """Real Qwen3-ASR tokenizer with a fake model that scores every mark 5.5 below text and EOS."""
+    tokenizer = AutoTokenizer.from_pretrained(ASR_MODEL)
+    scores = torch.zeros(1, len(tokenizer))
+    scores[0, [tokenizer.encode(p)[-1] for p in ZH_PUNCTUATIONS]] = -5.5
+    with patch("llm_punctuator.asr_punctuator.load_model") as load_model:
+        load_model.return_value = (FakeAudioEncoder(), ConstantScoreLM(scores), AUDIO_TOKEN_ID)
+        return ASRPunctuator(ASR_MODEL)
+
+
 @pytest.fixture
 def wav_path(tmp_path: Path) -> Path:
     """One second of tone at 16 kHz."""
@@ -143,6 +154,40 @@ def test_each_text_gets_its_own_result_in_input_order(
     results = asr_punctuator.add_punctuation(["鼓勵長輩", "中共2017年"], [str(wav_path)] * 2)
 
     assert results == ["鼓，勵，長，輩，", "中共，2017，年，"]
+
+
+@K_VALUES
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("甲乙丙丁戊己庚辛壬癸子丑寅卯", "甲乙丙丁戊己，庚辛壬癸子丑，寅卯"),
+        ("甲乙丙丁戊己庚辛壬癸子丑", "甲乙丙丁戊己，庚辛壬癸子丑，"),
+    ],
+    ids=["14_chars_no_trailing_mark", "12_chars_trailing_mark"],
+)
+def test_distance_bonus_puts_a_mark_once_six_chars_outscore_the_gap(
+    mark_gap_punctuator: ASRPunctuator, wav_path: Path, text: str, expected: str, k: int
+) -> None:
+    """With bonus 1 per char against a gap of 5.5, a mark goes after every 6 chars, even at the end."""
+    assert all(len(s) == 1 for s in mark_gap_punctuator.split_segments(text, "zh"))
+
+    [result] = mark_gap_punctuator.add_punctuation(
+        [text], [str(wav_path)], punctuations="，", k=k, distance_bonus=1.0
+    )
+
+    assert result == expected
+
+
+@pytest.mark.parametrize("text", ["口負成長新生兒", "naïve café 😀 ok"], ids=["zh", "en"])
+def test_char_counts_match_decoding_each_prefix(asr_punctuator: ASRPunctuator, text: str) -> None:
+    """Counts equal the non-whitespace characters of each decoded prefix, split characters too."""
+    tokens = asr_punctuator.tokenizer.encode(text)
+    expected = [
+        sum(not c.isspace() for c in asr_punctuator.decode(tokens[:p]))
+        for p in range(len(tokens) + 1)
+    ]
+
+    assert asr_punctuator.char_counts(tokens) == expected
 
 
 def test_build_prompt_fills_context_and_keeps_other_braces() -> None:
@@ -378,6 +423,23 @@ def test_missing_second_file_raises_before_any_audio_is_encoded(
         asr_punctuator.add_punctuation(["今天", "明天"], [str(wav_path), "/no/such.wav"])
 
     assert encoder.calls == 0
+
+
+@pytest.mark.parametrize("distance_bonus", [-0.1, float("nan"), float("inf")])
+def test_invalid_distance_bonus_raises_before_any_audio_is_read(
+    asr_punctuator: ASRPunctuator, wav_path: Path, distance_bonus: float
+) -> None:
+    """A negative or non-finite bonus raises ValueError naming it, and no audio is loaded."""
+    with (
+        patch("llm_punctuator.asr_punctuator.load_audio") as load_audio,
+        pytest.raises(
+            ValueError,
+            match=re.escape(f"distance_bonus must be finite and >= 0, got {distance_bonus}"),
+        ),
+    ):
+        asr_punctuator.add_punctuation(["今天"], [str(wav_path)], distance_bonus=distance_bonus)
+
+    assert not load_audio.called
 
 
 def test_unsupported_model_raises_before_loading() -> None:

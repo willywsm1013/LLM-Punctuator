@@ -2,6 +2,7 @@
 
 import itertools
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +24,7 @@ from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import (
 )
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import Qwen3OmniMoeAudioEncoder
 
-from llm_punctuator.logits_processor import CustomLogitsProcessor
+from llm_punctuator.logits_processor import DistanceBonusProcessor
 from llm_punctuator.punctuator import ForcedPunctuator
 
 SAMPLE_RATE = 16000
@@ -246,6 +247,27 @@ class ASRPunctuator(ForcedPunctuator):
         feature_lens = torch.tensor([n_frames], device=self.device)
         return self.audio_encoder(input_features, feature_lens=feature_lens).last_hidden_state
 
+    def char_counts(self, tokens: list[int]) -> list[int]:
+        """Count the non-whitespace characters the first p tokens decode to, for each p.
+
+        A token that ends inside a character decodes it as one replacement character, as the
+        whole prefix would. Decoding restarts after each token that does not, so the cost grows
+        linearly with the text.
+
+        Args:
+            tokens: Token IDs of a text.
+
+        Returns:
+            The counts for p from 0 to len(tokens).
+        """
+        counts, start = [0], 0
+        for end in range(1, len(tokens) + 1):
+            piece = self.decode(tokens[start:end])
+            counts.append(counts[start] + sum(not c.isspace() for c in piece))
+            if not piece.endswith("\ufffd"):
+                start = end
+        return counts
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -294,12 +316,15 @@ class ASRPunctuator(ForcedPunctuator):
         language: str,
         punctuations: str | None,
         k: int,
+        distance_bonus: float,
     ) -> None:
         """Raise on the first bad input. Reads no audio and runs no model."""
         if isinstance(texts, str):
             raise TypeError("texts must be a list of str, got str. Wrap a single text as [text].")
         if k == 0 or k < -1:
             raise ValueError(f"k must be -1 or a positive integer, got {k}")
+        if not (math.isfinite(distance_bonus) and distance_bonus >= 0):
+            raise ValueError(f"distance_bonus must be finite and >= 0, got {distance_bonus}")
         if len(texts) != len(audios):
             raise ValueError(
                 f"texts and audios must have the same length, got {len(texts)} and {len(audios)}"
@@ -331,6 +356,7 @@ class ASRPunctuator(ForcedPunctuator):
         context: str = "{text}",
         punctuations: str | None = None,
         k: int = -1,
+        distance_bonus: float = 0.0,
     ) -> list[str]:
         """Add punctuation to each text while the model hears its audio, one text at a time.
 
@@ -344,19 +370,23 @@ class ASRPunctuator(ForcedPunctuator):
                 language.
             k: Most positions where a mark may go to decide per forward pass. -1 decides the
                 whole text. Default: -1.
+            distance_bonus: Where a mark may go, every mark's score gets this times the
+                non-whitespace characters since the last mark, or since the start of the text.
+                Default: 0.0.
 
         Returns:
             Each text with punctuation added, in the order of texts.
 
         Raises:
             TypeError: If texts is a str.
-            ValueError: If k is 0 or below -1, texts and audios differ in length, language is
-                not in ``QWEN3_ASR_LANGUAGES``, language has no default punctuations and
-                punctuations is None, or an array is not 1-D.
+            ValueError: If k is 0 or below -1, distance_bonus is negative or not finite, texts
+                and audios differ in length, language is not in ``QWEN3_ASR_LANGUAGES``,
+                language has no default punctuations and punctuations is None, or an array is
+                not 1-D.
             FileNotFoundError: If an audio path is not a file. Every input is checked before
                 the first audio is read.
         """
-        self._check_inputs(texts, audios, language, punctuations, k)
+        self._check_inputs(texts, audios, language, punctuations, k, distance_bonus)
         if punctuations is None:
             punctuations = self.default_punctuations(language)
         punctuation_tokens = self.punctuation_token_ids(punctuations)
@@ -367,12 +397,14 @@ class ASRPunctuator(ForcedPunctuator):
             prompt = build_prompt(context, text, len(self.pending_audio), language)
             prompt_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
             segments = self.split_segments(text, language)
-            rule = CustomLogitsProcessor(
-                [token for segment in segments for token in segment]
-                + [self.tokenizer.eos_token_id],
+            tokens = [token for segment in segments for token in segment]
+            rule = DistanceBonusProcessor(
+                tokens + [self.tokenizer.eos_token_id],
                 punctuation_tokens,
                 has_prev_input=False,
                 unit_ends=set(itertools.accumulate(len(segment) for segment in segments)),
+                char_counts=self.char_counts(tokens),
+                distance_bonus=distance_bonus,
             )
             [generated] = self.greedy_search([(prompt_ids, rule)], k)
             results.append(self.decode(generated))
