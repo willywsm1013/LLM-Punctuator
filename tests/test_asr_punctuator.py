@@ -9,7 +9,13 @@ import numpy as np
 import pytest
 import soundfile
 import torch
-from transformers import AutoTokenizer, DynamicCache, Qwen3Config, Qwen3ForCausalLM
+from transformers import (
+    AttentionInterface,
+    AutoTokenizer,
+    DynamicCache,
+    Qwen3Config,
+    Qwen3ForCausalLM,
+)
 from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import (
     Qwen3OmniMoeAudioEncoderConfig,
 )
@@ -249,6 +255,38 @@ def test_audio_after_the_first_window_does_not_change_its_vectors() -> None:
     before, after = encode(encoder, features), encode(encoder, changed)
 
     assert torch.equal(after[:WINDOW_VECTORS], before[:WINDOW_VECTORS])
+
+
+def block_mask_sdpa(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    *,
+    scaling: float,
+    cu_seq_lens_q: torch.Tensor,
+    **kwargs: object,
+) -> tuple[torch.Tensor, None]:
+    """The windowed reference of #42: sdpa over the whole sequence with a block mask per window."""
+    lengths = (cu_seq_lens_q[1:] - cu_seq_lens_q[:-1]).tolist()
+    mask = torch.block_diag(*(torch.ones(n, n, dtype=torch.bool) for n in lengths))
+    out = torch.nn.functional.scaled_dot_product_attention(
+        query, key, value, attn_mask=mask, scale=scaling
+    )
+    return out.transpose(1, 2), None
+
+
+AttentionInterface.register("block_mask_sdpa", block_mask_sdpa)
+
+
+def test_audio_of_several_windows_matches_the_block_mask_reference() -> None:
+    """Two full windows and a 50-frame tail encode as sdpa does with a block mask per window."""
+    windowed = tiny_audio_encoder("windowed_attention")
+    reference = tiny_audio_encoder("block_mask_sdpa")
+    features = torch.randn(MEL_BINS, 2 * WINDOW_FRAMES + 50)
+
+    torch.testing.assert_close(encode(windowed, features), encode(reference, features))
 
 
 def test_audio_of_one_window_encodes_bit_identical_to_sdpa() -> None:
