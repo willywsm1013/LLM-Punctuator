@@ -1,6 +1,5 @@
 """Tests for TransformersLLMPunctuator: decoding and where marks may go."""
 
-import itertools
 import re
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -243,25 +242,16 @@ def test_en_marks_go_between_tokens_as_before(
 
 
 def step_by_step_greedy(
-    prompt: list[int],
-    rule: CustomLogitsProcessor,
-    model: object | None = None,
-    mark_bonus_per_char: float = 0.0,
+    prompt: list[int], rule: CustomLogitsProcessor, model: object | None = None
 ) -> list[int]:
     """Decode one token per forward with the rule as a logits processor, without EOS.
 
-    Before the rule, every mark gets mark_bonus_per_char times the non-whitespace characters
-    generated since the last mark, with one character per token as in CharTokenizer. The model
-    defaults to PrefixScoreModel. Each forward starts from an empty cache.
+    The model defaults to PrefixScoreModel. Each forward starts from an empty cache.
     """
     model = model or PrefixScoreModel()
-    marks = sorted(rule.punctuation_tokens)
     ids = torch.tensor([prompt])
     while ids[0, -1].item() != rule.original_text_tokens[-1]:
         scores = model(ids, past_key_values=DynamicCache()).logits[:, -1]
-        generated = ids[0, len(prompt) :].tolist()
-        since_mark = itertools.takewhile(lambda t: t not in marks, reversed(generated))
-        scores[:, marks] += mark_bonus_per_char * sum(not chr(t).isspace() for t in since_mark)
         next_id = rule(ids, scores).argmax(dim=-1, keepdim=True)
         ids = torch.cat([ids, next_id], dim=1)
     return ids[0, len(prompt) : -1].tolist()
@@ -295,6 +285,7 @@ def test_greedy_search_matches_step_by_step_greedy(
     assert results == [step_by_step_greedy(*new_job(*row)) for row in rows]
 
 
+# 0.25 is dyadic, so __call__'s float32 sums equal GreedyRow's float64 sums.
 @pytest.mark.parametrize("mark_bonus_per_char", [0.0, 0.25], ids=["no_bonus", "bonus"])
 @pytest.mark.parametrize("k", [-1, 1, 16], ids=["k_all", "k_1", "k_16"])
 def test_greedy_search_with_mark_bonus_per_char_matches_step_by_step_greedy(
@@ -307,24 +298,23 @@ def test_greedy_search_with_mark_bonus_per_char_matches_step_by_step_greedy(
         ("[user]", "今天在2017年 天氣很好我們去公園散步然後回家吃飯再去睡覺", False),
         ("[system]說明[user]", "去公園散步然後回家吃飯", True),
     ]
-    jobs, references = [], []
-    for prompt, text, has_prev_input in texts:
+
+    def new_job(prompt: str, text: str, has_prev_input: bool) -> ChunkJob:
         tokens = punctuator.encode_text(text)
-        unit_ends = set(range(1, len(tokens) + 1))
         char_counts = [sum(not c.isspace() for c in text[:p]) for p in range(len(text) + 1)]
-        prompt_ids = punctuator.encode_text(prompt)
         rule = DistanceBonusProcessor(
-            tokens + [EOS_ID], marks, has_prev_input, unit_ends, char_counts, mark_bonus_per_char
+            tokens + [EOS_ID],
+            marks,
+            has_prev_input,
+            set(range(1, len(tokens) + 1)),
+            char_counts,
+            mark_bonus_per_char,
         )
-        jobs.append((prompt_ids, rule))
-        plain = CustomLogitsProcessor(tokens + [EOS_ID], marks, has_prev_input, unit_ends)
-        references.append(
-            step_by_step_greedy(prompt_ids, plain, mark_bonus_per_char=mark_bonus_per_char)
-        )
+        return punctuator.encode_text(prompt), rule
 
-    results = punctuator.greedy_search(jobs, k)
+    results = punctuator.greedy_search([new_job(*text) for text in texts], k)
 
-    assert results == references
+    assert results == [step_by_step_greedy(*new_job(*text)) for text in texts]
 
 
 @pytest.mark.parametrize("k", [-1, 1], ids=["k_all", "k_1"])
