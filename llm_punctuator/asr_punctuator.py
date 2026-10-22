@@ -134,11 +134,30 @@ def load_model(model_name: str) -> tuple[Qwen3OmniMoeAudioEncoder, Qwen3ForCausa
         audio_encoder = Qwen3OmniMoeAudioEncoder._from_config(audio_config, dtype=dtype).eval()
         model = Qwen3ForCausalLM._from_config(text_config, dtype=dtype).eval()
 
+    mask_attention_windows(audio_encoder)
     audio_encoder.load_state_dict(_strip_prefix(weights, "thinker.audio_tower."), strict=True)
     lm_weights = {"model." + k: v for k, v in _strip_prefix(weights, "thinker.model.").items()}
     lm_weights["lm_head.weight"] = weights["thinker.lm_head.weight"]
     model.load_state_dict(lm_weights, strict=True)
     return audio_encoder, model, config["audio_token_id"]
+
+
+def mask_attention_windows(audio_encoder: Qwen3OmniMoeAudioEncoder) -> None:
+    """Give each encoder layer the block mask of its attention windows.
+
+    The mask is what the encoder's own ``_prepare_attention_mask`` builds from ``cu_seqlens``.
+
+    Args:
+        audio_encoder: The encoder to hook, in place.
+    """
+
+    def add_mask(layer: torch.nn.Module, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+        hidden_states, cu_seqlens = args
+        kwargs["attention_mask"] = audio_encoder._prepare_attention_mask(hidden_states, cu_seqlens)
+        return args, kwargs
+
+    for layer in audio_encoder.layers:
+        layer.register_forward_pre_hook(add_mask, with_kwargs=True)
 
 
 def _without_model_type(config: dict) -> dict:
