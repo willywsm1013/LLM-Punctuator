@@ -1,6 +1,5 @@
 """Tests for ASRPunctuator: audio input, prompt, and forced decoding."""
 
-import copy
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,13 +15,7 @@ from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import (
 )
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import Qwen3OmniMoeAudioEncoder
 
-from llm_punctuator.asr_punctuator import (
-    SAMPLE_RATE,
-    ASRPunctuator,
-    build_prompt,
-    load_audio,
-    mask_attention_windows,
-)
+from llm_punctuator.asr_punctuator import SAMPLE_RATE, ASRPunctuator, build_prompt, load_audio
 from llm_punctuator.schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
 from tests.test_punctuator import ZH_UNIT_CASES
 
@@ -246,13 +239,9 @@ def encode(encoder: Qwen3OmniMoeAudioEncoder, features: torch.Tensor) -> torch.T
         return encoder(features, feature_lens=torch.tensor([features.shape[1]])).last_hidden_state
 
 
-@pytest.mark.parametrize("attn_implementation", ["sdpa", "eager"])
-def test_audio_after_the_first_window_does_not_change_its_vectors(
-    attn_implementation: str,
-) -> None:
+def test_audio_after_the_first_window_does_not_change_its_vectors() -> None:
     """Changing the 50-frame tail window leaves the first window's vectors as they were."""
-    encoder = tiny_audio_encoder(attn_implementation)
-    mask_attention_windows(encoder)
+    encoder = tiny_audio_encoder("windowed_attention")
     features = torch.randn(MEL_BINS, WINDOW_FRAMES + 50)
     changed = features.clone()
     changed[:, WINDOW_FRAMES:] = torch.randn(MEL_BINS, 50)
@@ -262,14 +251,12 @@ def test_audio_after_the_first_window_does_not_change_its_vectors(
     assert torch.equal(after[:WINDOW_VECTORS], before[:WINDOW_VECTORS])
 
 
-def test_audio_of_one_window_encodes_bit_identical_to_the_unmasked_encoder() -> None:
-    """With a single window the mask hides nothing, so the output does not change at all."""
-    encoder = tiny_audio_encoder("sdpa")
-    unmasked = copy.deepcopy(encoder)
-    mask_attention_windows(encoder)
+def test_audio_of_one_window_encodes_bit_identical_to_sdpa() -> None:
+    """With a single window there is nothing to cut, so the output equals plain sdpa's."""
+    windowed, sdpa = tiny_audio_encoder("windowed_attention"), tiny_audio_encoder("sdpa")
     features = torch.randn(MEL_BINS, WINDOW_FRAMES)
 
-    assert torch.equal(encode(encoder, features), encode(unmasked, features))
+    assert torch.equal(encode(windowed, features), encode(sdpa, features))
 
 
 @pytest.mark.parametrize(

@@ -11,6 +11,7 @@ import torch
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file
 from transformers import (
+    AttentionInterface,
     AutoTokenizer,
     DynamicCache,
     Qwen3Config,
@@ -127,14 +128,14 @@ def load_model(model_name: str) -> tuple[Qwen3OmniMoeAudioEncoder, Qwen3ForCausa
 
     audio_config = Qwen3OmniMoeAudioEncoderConfig(**_without_model_type(config["audio_config"]))
     text_config = Qwen3Config(**_without_model_type(config["text_config"]))
-    audio_config._attn_implementation = text_config._attn_implementation = "sdpa"
+    audio_config._attn_implementation = "windowed_attention"
+    text_config._attn_implementation = "sdpa"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = getattr(torch, config["dtype"])
     with torch.device(device):
         audio_encoder = Qwen3OmniMoeAudioEncoder._from_config(audio_config, dtype=dtype).eval()
         model = Qwen3ForCausalLM._from_config(text_config, dtype=dtype).eval()
 
-    mask_attention_windows(audio_encoder)
     audio_encoder.load_state_dict(_strip_prefix(weights, "thinker.audio_tower."), strict=True)
     lm_weights = {"model." + k: v for k, v in _strip_prefix(weights, "thinker.model.").items()}
     lm_weights["lm_head.weight"] = weights["thinker.lm_head.weight"]
@@ -142,22 +143,48 @@ def load_model(model_name: str) -> tuple[Qwen3OmniMoeAudioEncoder, Qwen3ForCausa
     return audio_encoder, model, config["audio_token_id"]
 
 
-def mask_attention_windows(audio_encoder: Qwen3OmniMoeAudioEncoder) -> None:
-    """Give each encoder layer the block mask of its attention windows.
-
-    The mask is what the encoder's own ``_prepare_attention_mask`` builds from ``cu_seqlens``.
+def windowed_attention(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    *,
+    scaling: float,
+    cu_seq_lens_q: torch.Tensor,
+    **kwargs: object,
+) -> tuple[torch.Tensor, None]:
+    """Attend within each window of cu_seq_lens_q; windows of one length go to sdpa as one batch.
 
     Args:
-        audio_encoder: The encoder to hook, in place.
+        module: The attention module that calls this.
+        query: Shape (1, heads, sequence, head_dim). So are key and value.
+        key: Keys.
+        value: Values.
+        attention_mask: Unused. The windows come from cu_seq_lens_q.
+        scaling: Scale of the attention scores.
+        cu_seq_lens_q: Cumulative window lengths, starting at 0.
+        **kwargs: Other arguments of the attention interface, unused.
+
+    Returns:
+        The output, shaped (1, sequence, heads, head_dim), and None for the weights.
     """
+    lengths = (cu_seq_lens_q[1:] - cu_seq_lens_q[:-1]).tolist()
+    outputs, start = [], 0
+    for length, run in itertools.groupby(lengths):
+        count = len(list(run))
+        end = start + count * length
+        q, k, v = (
+            t[0, :, start:end].unflatten(1, (count, length)).transpose(0, 1)
+            for t in (query, key, value)
+        )
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=scaling)
+        outputs.append(out.transpose(1, 2).flatten(0, 1))
+        start = end
+    return torch.cat(outputs)[None], None
 
-    def add_mask(layer: torch.nn.Module, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
-        hidden_states, cu_seqlens = args
-        kwargs["attention_mask"] = audio_encoder._prepare_attention_mask(hidden_states, cu_seqlens)
-        return args, kwargs
 
-    for layer in audio_encoder.layers:
-        layer.register_forward_pre_hook(add_mask, with_kwargs=True)
+AttentionInterface.register("windowed_attention", windowed_attention)
 
 
 def _without_model_type(config: dict) -> dict:
