@@ -9,7 +9,17 @@ import numpy as np
 import pytest
 import soundfile
 import torch
-from transformers import AutoTokenizer, DynamicCache, Qwen3Config, Qwen3ForCausalLM
+from transformers import (
+    AttentionInterface,
+    AutoTokenizer,
+    DynamicCache,
+    Qwen3Config,
+    Qwen3ForCausalLM,
+)
+from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import (
+    Qwen3OmniMoeAudioEncoderConfig,
+)
+from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import Qwen3OmniMoeAudioEncoder
 
 from llm_punctuator.asr_punctuator import SAMPLE_RATE, ASRPunctuator, build_prompt, load_audio
 from llm_punctuator.schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
@@ -204,6 +214,87 @@ def test_forward_rejects_pad_count_that_differs_from_audio_vectors(
 
     with pytest.raises(ValueError, match="2 audio pads but 3 audio vectors"):
         forward_all(tiny_asr_punctuator, [151644, AUDIO_TOKEN_ID, AUDIO_TOKEN_ID, 151645])
+
+
+MEL_BINS = 16
+WINDOW_FRAMES = 800
+WINDOW_VECTORS = 104
+
+
+def tiny_audio_encoder(attn_implementation: str) -> Qwen3OmniMoeAudioEncoder:
+    """A randomly initialized real audio encoder with Qwen3-ASR's chunk and window sizes."""
+    torch.manual_seed(0)
+    config = Qwen3OmniMoeAudioEncoderConfig(
+        num_mel_bins=MEL_BINS,
+        encoder_layers=2,
+        encoder_attention_heads=2,
+        encoder_ffn_dim=32,
+        d_model=16,
+        output_dim=16,
+        downsample_hidden_size=4,
+        n_window=50,
+        n_window_infer=WINDOW_FRAMES,
+    )
+    config._attn_implementation = attn_implementation
+    return Qwen3OmniMoeAudioEncoder(config).eval()
+
+
+def encode(encoder: Qwen3OmniMoeAudioEncoder, features: torch.Tensor) -> torch.Tensor:
+    """Encode one audio's mel features, shaped (MEL_BINS, frames)."""
+    with torch.no_grad():
+        return encoder(features, feature_lens=torch.tensor([features.shape[1]])).last_hidden_state
+
+
+def test_audio_after_the_first_window_does_not_change_its_vectors() -> None:
+    """Changing the 50-frame tail window leaves the first window's vectors as they were."""
+    encoder = tiny_audio_encoder("windowed_attention")
+    features = torch.randn(MEL_BINS, WINDOW_FRAMES + 50)
+    changed = features.clone()
+    changed[:, WINDOW_FRAMES:] = torch.randn(MEL_BINS, 50)
+
+    before, after = encode(encoder, features), encode(encoder, changed)
+
+    assert torch.equal(after[:WINDOW_VECTORS], before[:WINDOW_VECTORS])
+
+
+def block_mask_sdpa(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    *,
+    scaling: float,
+    cu_seq_lens_q: torch.Tensor,
+    **kwargs: object,
+) -> tuple[torch.Tensor, None]:
+    """The windowed reference of #42: sdpa over the whole sequence with a block mask per window."""
+    lengths = (cu_seq_lens_q[1:] - cu_seq_lens_q[:-1]).tolist()
+    mask = torch.block_diag(*(torch.ones(n, n, dtype=torch.bool) for n in lengths))
+    out = torch.nn.functional.scaled_dot_product_attention(
+        query, key, value, attn_mask=mask, scale=scaling
+    )
+    return out.transpose(1, 2), None
+
+
+AttentionInterface.register("block_mask_sdpa", block_mask_sdpa)
+
+
+def test_audio_of_several_windows_matches_the_block_mask_reference() -> None:
+    """Two full windows and a 50-frame tail encode as sdpa does with a block mask per window."""
+    windowed = tiny_audio_encoder("windowed_attention")
+    reference = tiny_audio_encoder("block_mask_sdpa")
+    features = torch.randn(MEL_BINS, 2 * WINDOW_FRAMES + 50)
+
+    torch.testing.assert_close(encode(windowed, features), encode(reference, features))
+
+
+def test_audio_of_one_window_encodes_bit_identical_to_sdpa() -> None:
+    """With a single window there is nothing to cut, so the output equals plain sdpa's."""
+    windowed, sdpa = tiny_audio_encoder("windowed_attention"), tiny_audio_encoder("sdpa")
+    features = torch.randn(MEL_BINS, WINDOW_FRAMES)
+
+    assert torch.equal(encode(windowed, features), encode(sdpa, features))
 
 
 @pytest.mark.parametrize(
