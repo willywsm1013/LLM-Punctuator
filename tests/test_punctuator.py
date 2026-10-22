@@ -8,7 +8,7 @@ import pytest
 import torch
 from transformers import AutoTokenizer, DynamicCache, Qwen3Config, Qwen3ForCausalLM
 
-from llm_punctuator.logits_processor import CustomLogitsProcessor
+from llm_punctuator.logits_processor import CustomLogitsProcessor, DistanceBonusProcessor
 from llm_punctuator.punctuator import ChunkJob, TransformersLLMPunctuator
 from llm_punctuator.schema import EN_PUNCTUATIONS, ZH_PUNCTUATIONS
 
@@ -283,6 +283,38 @@ def test_greedy_search_matches_step_by_step_greedy(
     results = punctuator.greedy_search([new_job(*row) for row in rows], k)
 
     assert results == [step_by_step_greedy(*new_job(*row)) for row in rows]
+
+
+# 0.25 is dyadic, so __call__'s float32 sums equal GreedyRow's float64 sums.
+@pytest.mark.parametrize("mark_bonus_per_char", [0.0, 0.25], ids=["no_bonus", "bonus"])
+@pytest.mark.parametrize("k", [-1, 1, 16], ids=["k_all", "k_1", "k_16"])
+def test_greedy_search_with_mark_bonus_per_char_matches_step_by_step_greedy(
+    punctuator: TransformersLLMPunctuator, k: int, mark_bonus_per_char: float
+) -> None:
+    """Rows of a distance bonus rule get what one token per forward gives with the same bonus."""
+    punctuator.model = PrefixScoreModel()
+    marks = [ord(p) for p in ZH_PUNCTUATIONS]
+    texts = [
+        ("[user]", "今天在2017年 天氣很好我們去公園散步然後回家吃飯再去睡覺", False),
+        ("[system]說明[user]", "去公園散步然後回家吃飯", True),
+    ]
+
+    def new_job(prompt: str, text: str, has_prev_input: bool) -> ChunkJob:
+        tokens = punctuator.encode_text(text)
+        char_counts = [sum(not c.isspace() for c in text[:p]) for p in range(len(text) + 1)]
+        rule = DistanceBonusProcessor(
+            tokens + [EOS_ID],
+            marks,
+            has_prev_input,
+            set(range(1, len(tokens) + 1)),
+            char_counts,
+            mark_bonus_per_char,
+        )
+        return punctuator.encode_text(prompt), rule
+
+    results = punctuator.greedy_search([new_job(*text) for text in texts], k)
+
+    assert results == [step_by_step_greedy(*new_job(*text)) for text in texts]
 
 
 @pytest.mark.parametrize("k", [-1, 1], ids=["k_all", "k_1"])
