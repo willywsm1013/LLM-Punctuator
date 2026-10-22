@@ -8,7 +8,7 @@ Add punctuation to unpunctuated text (ASR outputs, transcripts) using LLM with c
   - [Using uv (recommended)](#using-uv-recommended)
   - [Using pip](#using-pip)
 - [Usage](#usage)
-  - [Distance Bonus (ASR models)](#distance-bonus-asr-models)
+  - [Mark Bonus per Character (ASR models)](#mark-bonus-per-character-asr-models)
   - [Supported Models](#supported-models)
 - [Benchmark Results](#benchmark-results)
 - [Development](#development)
@@ -61,23 +61,23 @@ python example.py --list texts.jsonl -o punctuated.jsonl
 ```
 See `python example.py --help` for the list format.
 
-### Distance Bonus (ASR models)
+### Mark Bonus per Character (ASR models)
 
-An ASR model may stop putting marks for hundreds of characters. `distance_bonus` makes a mark
+An ASR model may stop putting marks for hundreds of characters. `mark_bonus_per_char` makes a mark
 more likely the further it is from the last mark:
 
 ```python
-punctuator.add_punctuation(texts, audios, distance_bonus=0.2)
+punctuator.add_punctuation(texts, audios, mark_bonus_per_char=0.2)
 ```
 ```bash
-python example.py -m Qwen/Qwen3-ASR-1.7B --text ... --audio a.wav --distance-bonus 0.2
+python example.py -m Qwen/Qwen3-ASR-1.7B --text ... --audio a.wav --mark_bonus_per_char 0.2
 ```
 
-Where a mark may go, every mark's score gets `distance_bonus` times the number of characters
+Where a mark may go, every mark's score gets `mark_bonus_per_char` times the number of characters
 since the last mark. The count starts at the start of the text. It counts the non-whitespace
 characters of the input text, in every language. The mark then competes with the next token,
 which is text or the end of the text. The default `0.0` leaves the output as it was.
-`distance_bonus` must be finite and `>= 0`.
+`mark_bonus_per_char` must be finite and `>= 0`.
 
 #### Measured Effect
 

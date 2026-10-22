@@ -165,14 +165,14 @@ def test_each_text_gets_its_own_result_in_input_order(
     ],
     ids=["14_chars_no_trailing_mark", "12_chars_trailing_mark"],
 )
-def test_distance_bonus_puts_a_mark_once_six_chars_outscore_the_gap(
+def test_mark_bonus_per_char_puts_a_mark_once_six_chars_outscore_the_gap(
     mark_gap_punctuator: ASRPunctuator, wav_path: Path, text: str, expected: str, k: int
 ) -> None:
     """With bonus 1 per char against a gap of 5.5, a mark goes after every 6 chars, even at the end."""
     assert all(len(s) == 1 for s in mark_gap_punctuator.split_segments(text, "zh"))
 
     [result] = mark_gap_punctuator.add_punctuation(
-        [text], [str(wav_path)], punctuations="，", k=k, distance_bonus=1.0
+        [text], [str(wav_path)], punctuations="，", k=k, mark_bonus_per_char=1.0
     )
 
     assert result == expected
@@ -425,19 +425,23 @@ def test_missing_second_file_raises_before_any_audio_is_encoded(
     assert encoder.calls == 0
 
 
-@pytest.mark.parametrize("distance_bonus", [-0.1, float("nan"), float("inf")])
-def test_invalid_distance_bonus_raises_before_any_audio_is_read(
-    asr_punctuator: ASRPunctuator, wav_path: Path, distance_bonus: float
+@pytest.mark.parametrize("mark_bonus_per_char", [-0.1, float("nan"), float("inf")])
+def test_invalid_mark_bonus_per_char_raises_before_any_audio_is_read(
+    asr_punctuator: ASRPunctuator, wav_path: Path, mark_bonus_per_char: float
 ) -> None:
     """A negative or non-finite bonus raises ValueError naming it, and no audio is loaded."""
     with (
         patch("llm_punctuator.asr_punctuator.load_audio") as load_audio,
         pytest.raises(
             ValueError,
-            match=re.escape(f"distance_bonus must be finite and >= 0, got {distance_bonus}"),
+            match=re.escape(
+                f"mark_bonus_per_char must be finite and >= 0, got {mark_bonus_per_char}"
+            ),
         ),
     ):
-        asr_punctuator.add_punctuation(["今天"], [str(wav_path)], distance_bonus=distance_bonus)
+        asr_punctuator.add_punctuation(
+            ["今天"], [str(wav_path)], mark_bonus_per_char=mark_bonus_per_char
+        )
 
     assert not load_audio.called
 

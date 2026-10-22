@@ -246,11 +246,11 @@ def step_by_step_greedy(
     prompt: list[int],
     rule: CustomLogitsProcessor,
     model: object | None = None,
-    distance_bonus: float = 0.0,
+    mark_bonus_per_char: float = 0.0,
 ) -> list[int]:
     """Decode one token per forward with the rule as a logits processor, without EOS.
 
-    Before the rule, every mark gets distance_bonus times the non-whitespace characters
+    Before the rule, every mark gets mark_bonus_per_char times the non-whitespace characters
     generated since the last mark, with one character per token as in CharTokenizer. The model
     defaults to PrefixScoreModel. Each forward starts from an empty cache.
     """
@@ -261,7 +261,7 @@ def step_by_step_greedy(
         scores = model(ids, past_key_values=DynamicCache()).logits[:, -1]
         generated = ids[0, len(prompt) :].tolist()
         since_mark = itertools.takewhile(lambda t: t not in marks, reversed(generated))
-        scores[:, marks] += distance_bonus * sum(not chr(t).isspace() for t in since_mark)
+        scores[:, marks] += mark_bonus_per_char * sum(not chr(t).isspace() for t in since_mark)
         next_id = rule(ids, scores).argmax(dim=-1, keepdim=True)
         ids = torch.cat([ids, next_id], dim=1)
     return ids[0, len(prompt) : -1].tolist()
@@ -295,10 +295,10 @@ def test_greedy_search_matches_step_by_step_greedy(
     assert results == [step_by_step_greedy(*new_job(*row)) for row in rows]
 
 
-@pytest.mark.parametrize("distance_bonus", [0.0, 0.25], ids=["no_bonus", "bonus"])
+@pytest.mark.parametrize("mark_bonus_per_char", [0.0, 0.25], ids=["no_bonus", "bonus"])
 @pytest.mark.parametrize("k", [-1, 1, 16], ids=["k_all", "k_1", "k_16"])
-def test_greedy_search_with_distance_bonus_matches_step_by_step_greedy(
-    punctuator: TransformersLLMPunctuator, k: int, distance_bonus: float
+def test_greedy_search_with_mark_bonus_per_char_matches_step_by_step_greedy(
+    punctuator: TransformersLLMPunctuator, k: int, mark_bonus_per_char: float
 ) -> None:
     """Rows of a distance bonus rule get what one token per forward gives with the same bonus."""
     punctuator.model = PrefixScoreModel()
@@ -314,11 +314,13 @@ def test_greedy_search_with_distance_bonus_matches_step_by_step_greedy(
         char_counts = [sum(not c.isspace() for c in text[:p]) for p in range(len(text) + 1)]
         prompt_ids = punctuator.encode_text(prompt)
         rule = DistanceBonusProcessor(
-            tokens + [EOS_ID], marks, has_prev_input, unit_ends, char_counts, distance_bonus
+            tokens + [EOS_ID], marks, has_prev_input, unit_ends, char_counts, mark_bonus_per_char
         )
         jobs.append((prompt_ids, rule))
         plain = CustomLogitsProcessor(tokens + [EOS_ID], marks, has_prev_input, unit_ends)
-        references.append(step_by_step_greedy(prompt_ids, plain, distance_bonus=distance_bonus))
+        references.append(
+            step_by_step_greedy(prompt_ids, plain, mark_bonus_per_char=mark_bonus_per_char)
+        )
 
     results = punctuator.greedy_search(jobs, k)
 

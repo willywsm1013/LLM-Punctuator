@@ -310,11 +310,13 @@ def test_asr_k_reaches_add_punctuation() -> None:
     assert FakeASRPunctuator.last_call["k"] == 3
 
 
-def test_asr_distance_bonus_reaches_add_punctuation() -> None:
-    """--distance-bonus is passed through as distance_bonus."""
-    run_example(["-m", ASR_MODEL, "--audio", "a.wav", "--text", "今天", "--distance-bonus", "0.2"])
+def test_asr_mark_bonus_per_char_reaches_add_punctuation() -> None:
+    """--mark_bonus_per_char is passed through as mark_bonus_per_char."""
+    run_example(
+        ["-m", ASR_MODEL, "--audio", "a.wav", "--text", "今天", "--mark_bonus_per_char", "0.2"]
+    )
 
-    assert FakeASRPunctuator.last_call["distance_bonus"] == 0.2
+    assert FakeASRPunctuator.last_call["mark_bonus_per_char"] == 0.2
 
 
 def test_text_llm_without_chunk_size_still_uses_50() -> None:
@@ -343,8 +345,8 @@ def test_text_llm_without_chunk_size_still_uses_50() -> None:
         (["--audio", "a.wav", "--text", "今天"], "--audio and --context need an ASR model"),
         (["--context", "{text}", "--text", "今天"], "--audio and --context need an ASR model"),
         (
-            ["--distance-bonus", "0.2", "--text", "今天"],
-            "--distance-bonus needs an ASR model",
+            ["--mark_bonus_per_char", "0.2", "--text", "今天"],
+            "--mark_bonus_per_char needs an ASR model",
         ),
     ],
     ids=[
@@ -354,7 +356,7 @@ def test_text_llm_without_chunk_size_still_uses_50() -> None:
         "asr_with_batch_size",
         "text_llm_with_audio",
         "text_llm_with_context",
-        "text_llm_with_distance_bonus",
+        "text_llm_with_mark_bonus_per_char",
     ],
 )
 def test_invalid_model_and_option_combination_exits_2(

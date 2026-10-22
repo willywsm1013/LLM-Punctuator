@@ -316,15 +316,17 @@ class ASRPunctuator(ForcedPunctuator):
         language: str,
         punctuations: str | None,
         k: int,
-        distance_bonus: float,
+        mark_bonus_per_char: float,
     ) -> None:
         """Raise on the first bad input. Reads no audio and runs no model."""
         if isinstance(texts, str):
             raise TypeError("texts must be a list of str, got str. Wrap a single text as [text].")
         if k == 0 or k < -1:
             raise ValueError(f"k must be -1 or a positive integer, got {k}")
-        if not (math.isfinite(distance_bonus) and distance_bonus >= 0):
-            raise ValueError(f"distance_bonus must be finite and >= 0, got {distance_bonus}")
+        if not (math.isfinite(mark_bonus_per_char) and mark_bonus_per_char >= 0):
+            raise ValueError(
+                f"mark_bonus_per_char must be finite and >= 0, got {mark_bonus_per_char}"
+            )
         if len(texts) != len(audios):
             raise ValueError(
                 f"texts and audios must have the same length, got {len(texts)} and {len(audios)}"
@@ -356,7 +358,7 @@ class ASRPunctuator(ForcedPunctuator):
         context: str = "{text}",
         punctuations: str | None = None,
         k: int = -1,
-        distance_bonus: float = 0.0,
+        mark_bonus_per_char: float = 0.0,
     ) -> list[str]:
         """Add punctuation to each text while the model hears its audio, one text at a time.
 
@@ -370,7 +372,7 @@ class ASRPunctuator(ForcedPunctuator):
                 language.
             k: Most positions where a mark may go to decide per forward pass. -1 decides the
                 whole text. Default: -1.
-            distance_bonus: Where a mark may go, every mark's score gets this times the
+            mark_bonus_per_char: Where a mark may go, every mark's score gets this times the
                 non-whitespace characters since the last mark, or since the start of the text.
                 Default: 0.0.
 
@@ -379,14 +381,14 @@ class ASRPunctuator(ForcedPunctuator):
 
         Raises:
             TypeError: If texts is a str.
-            ValueError: If k is 0 or below -1, distance_bonus is negative or not finite, texts
+            ValueError: If k is 0 or below -1, mark_bonus_per_char is negative or not finite, texts
                 and audios differ in length, language is not in ``QWEN3_ASR_LANGUAGES``,
                 language has no default punctuations and punctuations is None, or an array is
                 not 1-D.
             FileNotFoundError: If an audio path is not a file. Every input is checked before
                 the first audio is read.
         """
-        self._check_inputs(texts, audios, language, punctuations, k, distance_bonus)
+        self._check_inputs(texts, audios, language, punctuations, k, mark_bonus_per_char)
         if punctuations is None:
             punctuations = self.default_punctuations(language)
         punctuation_tokens = self.punctuation_token_ids(punctuations)
@@ -404,7 +406,7 @@ class ASRPunctuator(ForcedPunctuator):
                 has_prev_input=False,
                 unit_ends=set(itertools.accumulate(len(segment) for segment in segments)),
                 char_counts=self.char_counts(tokens),
-                distance_bonus=distance_bonus,
+                mark_bonus_per_char=mark_bonus_per_char,
             )
             [generated] = self.greedy_search([(prompt_ids, rule)], k)
             results.append(self.decode(generated))

@@ -178,7 +178,7 @@ class DistanceBonusProcessor(CustomLogitsProcessor):
         has_prev_input: bool,
         unit_ends: set[int],
         char_counts: list[int],
-        distance_bonus: float,
+        mark_bonus_per_char: float,
     ) -> None:
         """Initialize the processor.
 
@@ -189,13 +189,13 @@ class DistanceBonusProcessor(CustomLogitsProcessor):
             unit_ends: As in CustomLogitsProcessor.
             char_counts: Non-whitespace characters in the first p text tokens, for each p from
                 0 to the number of text tokens.
-            distance_bonus: Bonus per character since the last mark.
+            mark_bonus_per_char: Bonus per character since the last mark.
         """
         super().__init__(original_text_tokens, punctuation_tokens, has_prev_input, unit_ends)
         self.char_counts = char_counts
-        self.distance_bonus = distance_bonus
+        self.mark_bonus_per_char = mark_bonus_per_char
 
     def mark_bonus(self, num_text_tokens_generated: int, last_mark: int) -> float:
-        """Return distance_bonus times the characters generated since the last mark."""
+        """Return mark_bonus_per_char times the characters generated since the last mark."""
         distance = self.char_counts[num_text_tokens_generated] - self.char_counts[last_mark]
-        return self.distance_bonus * distance
+        return self.mark_bonus_per_char * distance

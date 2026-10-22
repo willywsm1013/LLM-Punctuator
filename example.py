@@ -78,7 +78,7 @@ def get_args() -> argparse.Namespace:
         "Default: the default of add_punctuation",
     )
     parser.add_argument(
-        "--distance-bonus",
+        "--mark_bonus_per_char",
         type=float,
         help="For an ASR model, add this times the characters since the last mark to every "
         "mark's score. See README. Default: the default of add_punctuation",
@@ -97,8 +97,8 @@ def get_args() -> argparse.Namespace:
             parser.error("--batch_size does not apply to an ASR model")
     elif args.audio is not None or args.context is not None:
         parser.error("--audio and --context need an ASR model")
-    elif args.distance_bonus is not None:
-        parser.error("--distance-bonus needs an ASR model")
+    elif args.mark_bonus_per_char is not None:
+        parser.error("--mark_bonus_per_char needs an ASR model")
     if args.batch_size is not None and args.batch_size < 1:
         parser.error(f"--batch_size must be a positive integer, got {args.batch_size}")
     return args
@@ -214,8 +214,8 @@ if __name__ == "__main__":
     if is_asr:
         if args.context is not None:
             options["context"] = args.context
-        if args.distance_bonus is not None:
-            options["distance_bonus"] = args.distance_bonus
+        if args.mark_bonus_per_char is not None:
+            options["mark_bonus_per_char"] = args.mark_bonus_per_char
         asr_punctuator = ASRPunctuator(args.model_name_or_path)
         results = asr_punctuator.add_punctuation(
             clean_texts, audios, language=args.language, **options
